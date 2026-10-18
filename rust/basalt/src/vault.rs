@@ -195,48 +195,6 @@ impl Vault {
         Ok(v)
     }
 
-    /// Open a vault over a transport this struct does not own.
-    ///
-    /// The export needs to index the vault it has just written, and the
-    /// destination transport belongs to the caller. A thin forwarding wrapper
-    /// is cheaper than making `Vault` generic over ownership for one call.
-    fn open_boxed_ref(t: &dyn Transport) -> Result<Vault> {
-        struct Borrowed<'a>(&'a dyn Transport);
-        impl Transport for Borrowed<'_> {
-            fn get(&self, key: &str) -> crate::transport::Result<Option<Vec<u8>>> {
-                self.0.get(key)
-            }
-            fn put(
-                &self,
-                key: &str,
-                bytes: &[u8],
-                meta: &PutMeta,
-            ) -> crate::transport::Result<crate::transport::Stat> {
-                self.0.put(key, bytes, meta)
-            }
-            fn delete(&self, key: &str) -> crate::transport::Result<()> {
-                self.0.delete(key)
-            }
-            fn list(
-                &self,
-                prefix: &str,
-                opts: &crate::transport::ListOpts,
-            ) -> crate::transport::Result<crate::transport::Listing> {
-                self.0.list(prefix, opts)
-            }
-            fn stat(&self, key: &str) -> crate::transport::Result<Option<crate::transport::Stat>> {
-                self.0.stat(key)
-            }
-            fn capabilities(&self) -> &std::collections::BTreeSet<crate::transport::Capability> {
-                self.0.capabilities()
-            }
-        }
-        // SAFETY of the lifetime: the wrapper is boxed into a Vault that is
-        // dropped before `t` is, inside the one call that builds it.
-        let leaked: &'static dyn Transport = unsafe { std::mem::transmute(t) };
-        Vault::open(Box::new(Borrowed(leaked)))
-    }
-
     fn read_text(t: &dyn Transport, key: &str) -> Result<Option<String>> {
         Ok(t.get(key)?
             .map(|b| String::from_utf8_lossy(&b).into_owned()))
@@ -1029,10 +987,15 @@ impl Vault {
     /// MUST: it regenerates, so an edge to an excluded node is simply
     /// unresolved *within the export*, which is true there. §9.5's redaction
     /// stays where its own wording puts it — on a gatekeeper response.
-    pub fn export(&mut self, dest: &dyn Transport, opts: ExportOpts) -> Result<ExportSummary> {
+    pub fn export(
+        &mut self,
+        dest_box: Box<dyn Transport>,
+        opts: ExportOpts,
+    ) -> Result<(ExportSummary, Vault)> {
         if self.indexes.is_none() {
             self.reindex(false)?;
         }
+        let dest: &dyn Transport = &*dest_box;
         let public_audience = crate::acl::EvalOpts {
             audience: crate::acl::Audience::Public,
             ..self.manifest.eval_opts()
@@ -1098,14 +1061,18 @@ impl Vault {
         // One root ACL granting the public exactly what it may do. Every node
         // present is public by construction, so there are no per-node
         // descriptors to write — and none to leak.
+        let root_acl = concat!(
+            "# Every object in this export is public by construction (12.6), so one\n",
+            "# root descriptor is the whole security model, and there are no per-node\n",
+            "# descriptors to write - and so none to leak.\n",
+            "folder:\n",
+            "  protected: true\n",
+            "  dacl:\n",
+            "    - {type: allow, subject: everyone, rights: [read, list, traverse, publish], flags: [oi, ci]}\n",
+        );
         dest.put(
             &format!("{META}acl/acl.yaml"),
-            b"# Every object in this export is public by construction (Â§12.6).
-              folder:
-  protected: true
-  dacl:
-    - {type: allow, subject: everyone,               rights: [read, list, traverse, publish], flags: [oi, ci]}
-",
+            root_acl.as_bytes(),
             &PutMeta::default(),
         )?;
 
@@ -1153,15 +1120,20 @@ impl Vault {
         // Regenerate every index from the filtered subset. Nothing under
         // `index/`, `principals/` or `meta/acl/` is copied: the export's
         // indexes know only about the export's content, which is the point.
-        let mut exported = Vault::open_boxed_ref(dest)?;
+        // The export is now complete on disk; open it as a vault in its own
+        // right so its indexes are built the way any other vault's are.
+        let mut exported = Vault::open(dest_box)?;
         exported.reindex_opts(IndexWrite::forced())?;
 
-        Ok(ExportSummary {
-            vault_id,
-            included,
-            excluded,
-            source_digest: exported.indexes.as_ref().unwrap().source_digest.clone(),
-        })
+        Ok((
+            ExportSummary {
+                vault_id,
+                included,
+                excluded,
+                source_digest: exported.indexes.as_ref().unwrap().source_digest.clone(),
+            },
+            exported,
+        ))
     }
 
     /// Integrity findings from the last index pass, plus the principal-level

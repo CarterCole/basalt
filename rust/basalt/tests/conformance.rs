@@ -311,3 +311,119 @@ fn link_resolution() {
     }
     r.finish("links/resolution");
 }
+
+// ------------------------------------------------------- the inventory itself
+
+/// `conformance/manifest.yaml` declares the case inventory (§14.2). This
+/// asserts the runner actually sees every case the corpus claims, so a suite
+/// that grows cannot be silently skipped by a runner that was written against
+/// an older corpus — which is the failure mode that makes a conformance claim
+/// worthless.
+#[test]
+fn corpus_inventory_matches() {
+    let manifest = load("manifest.yaml");
+    let mut r = Report::default();
+
+    r.check(
+        "manifest",
+        "corpus major version",
+        n(&manifest, "basalt"),
+        Some(1i64),
+    );
+
+    for suite in manifest
+        .get("suites")
+        .and_then(|s| s.as_sequence())
+        .expect("manifest declares suites")
+    {
+        let file = s(suite, "file").unwrap();
+        let declared = n(suite, "cases").unwrap_or(0);
+        let doc = load(&file);
+        let actual = cases(&doc).len() as i64;
+
+        // The property that matters is that nothing has gone missing: the
+        // per-suite runners above iterate the *file*, so a case that exists is
+        // always executed. A file with fewer cases than the manifest declares
+        // means a case was dropped, which is a real regression.
+        if actual < declared {
+            r.check(&file, "cases present (none dropped)", actual, declared);
+        } else {
+            r.passed += 1;
+        }
+        // A surplus is bookkeeping drift in the manifest rather than a
+        // conformance failure, so it is reported and not fatal.
+        if actual > declared {
+            eprintln!(
+                "  note: {file} holds {actual} cases, manifest.yaml declares {declared} \
+                 — all {actual} are executed; the manifest count is stale"
+            );
+        }
+        r.check(&file, "level", s(&doc, "level"), s(suite, "level"));
+        r.check(&file, "spec section", s(&doc, "spec"), s(suite, "spec"));
+    }
+
+    for vault in manifest
+        .get("vaults")
+        .and_then(|v| v.as_sequence())
+        .unwrap_or(&vec![])
+    {
+        let dir = s(vault, "dir").unwrap();
+        let path = conformance_dir().join(&dir).join("vault/basalt.yaml");
+        r.check(&dir, "vault present", path.exists(), true);
+    }
+
+    r.finish("manifest inventory");
+}
+
+/// The levels this implementation claims (§14.1). An implementation declares
+/// the levels it meets, and each requires all below it; this test exists so the
+/// claim in `lib.rs` and `README.md` is checked rather than asserted.
+///
+/// L0 Transport, L1 Content, L2 Index, L3 Security and L4 Gatekeeper are
+/// covered by the suites in this directory. L5 History is **not** implemented:
+/// nothing here writes `history/`, so the claim stops at L4.
+#[test]
+fn declared_conformance_levels() {
+    let manifest = load("manifest.yaml");
+    let levels = manifest
+        .get("levels")
+        .and_then(|l| l.as_mapping())
+        .expect("manifest names the levels");
+
+    let claimed = ["L0", "L1", "L2", "L3", "L4"];
+    for level in claimed {
+        assert!(
+            levels
+                .get(serde_yaml_ng::Value::String(level.into()))
+                .is_some(),
+            "{level} is a level the corpus knows about"
+        );
+    }
+    // Every suite at or below the claimed ceiling must be one this runner
+    // executes. If the corpus adds, say, an L3 suite, this fails until the
+    // runner covers it.
+    let covered = [
+        "cases/keys/validation.yaml",
+        "cases/paths/collisions.yaml",
+        "cases/paths/folders.yaml",
+        "cases/frontmatter/parsing.yaml",
+        "cases/links/extraction.yaml",
+        "cases/links/resolution.yaml",
+        "cases/acl/evaluation.yaml",
+    ];
+    for suite in manifest
+        .get("suites")
+        .and_then(|x| x.as_sequence())
+        .unwrap()
+    {
+        let file = s(suite, "file").unwrap();
+        let level = s(suite, "level").unwrap_or_default();
+        if claimed.contains(&level.as_str()) {
+            assert!(
+                covered.contains(&file.as_str()),
+                "the corpus has a {level} suite this runner does not execute: {file}\n\
+                 Add it to tests/conformance.rs (or tests/acl.rs) before claiming {level}."
+            );
+        }
+    }
+}

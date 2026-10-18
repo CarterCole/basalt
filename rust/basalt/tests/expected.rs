@@ -221,3 +221,137 @@ fn first_difference(want: &str, got: &str) -> String {
     }
     "(identical line-by-line; a trailing-byte difference)".to_string()
 }
+
+/// §8.8 reads one way and the committed fixture requires the other, and this
+/// test pins which.
+///
+/// §8.8 says `search.json` MUST NOT contain a node's text "unless that node
+/// grants `read` to `everyone`". Read literally, that is a question about one
+/// ACE. The minimal vault's `Notes/` descriptor grants `everyone`
+/// `[read, list, traverse]` with `oi`, so `Notes/Hexes.md` and
+/// `Notes/Start Here.md` both satisfy it — and the literal reading would put
+/// their body text in `search.json`.
+///
+/// The committed `expected/search.json` has `"terms": {}`. It reproduces only
+/// under the stricter reading: index a node's text when an *anonymous request*
+/// would be allowed to read it on a public vault, which through §8.1 also
+/// demands `publish`. Nothing in this vault grants `publish`, so nothing is
+/// indexed.
+///
+/// §12.6 states the strict test precisely for the export case — "only nodes
+/// granting both `read` and `publish` to `anonymous` under §8.4" — so the two
+/// clauses should agree and §8.8 is the loose one.
+#[test]
+fn search_leak_rule_requires_publish_not_only_read() {
+    let mut vault = minimal_vault();
+    rebuild(&mut vault);
+
+    // The literal §8.8 condition holds for Hexes.md: an `everyone` ACE decides
+    // `read` as allow.
+    let d = vault.can("u:reader", "Notes/Hexes.md", &["read"]);
+    assert_eq!(d.decisions["read"].decision, basalt::acl::Decision::Allow);
+    assert_eq!(
+        d.decisions["read"].by, "allow:everyone",
+        "the deciding ACE is the everyone grant, so §8.8 read literally is satisfied"
+    );
+
+    // And the node has body text that the literal reading would index.
+    let body = vault
+        .indexes
+        .as_ref()
+        .unwrap()
+        .node("Notes/Hexes.md")
+        .unwrap()
+        .body
+        .clone()
+        .unwrap();
+    let tokens = basalt::indexer::tokenize(&body);
+    assert!(
+        tokens.len() >= 5,
+        "there is real text here to leak: {tokens:?}"
+    );
+
+    // Under the strict reading, no node is indexable, because `publish` is
+    // granted nowhere.
+    assert!(
+        !vault
+            .can("anonymous", "Notes/Hexes.md", &["publish"])
+            .allowed,
+        "nothing in the minimal vault grants publish"
+    );
+
+    // Which is what the corpus says the answer is.
+    let terms = vault
+        .indexes
+        .as_ref()
+        .unwrap()
+        .search
+        .get("terms")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert!(
+        terms.is_empty(),
+        "expected/search.json is empty, so the strict reading is the conforming one; \
+         got {:?}",
+        terms.keys().collect::<Vec<_>>()
+    );
+}
+
+/// §0: index generation is deterministic. Two passes over identical content
+/// must produce identical bytes, `generated` aside — the within-implementation
+/// half of the property the cross-implementation comparison above tests.
+///
+/// Run over every vault in the corpus, including ones with no committed
+/// `expected/`, so a vault added for documentation still exercises this.
+#[test]
+fn indexing_is_deterministic_for_every_corpus_vault() {
+    let vaults = conformance_dir().join("vaults");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&vaults).expect("vaults/ exists") {
+        let dir = entry.unwrap().path().join("vault");
+        if !dir.join("basalt.yaml").exists() {
+            continue;
+        }
+        let name = dir
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut first = Vault::open(Box::new(FsTransport::new(&dir))).unwrap();
+        rebuild(&mut first);
+        let mut second = Vault::open(Box::new(FsTransport::new(&dir))).unwrap();
+        rebuild(&mut second);
+
+        for (idx, _) in INDEX_KEYS {
+            let a = first.indexes.as_ref().unwrap().by_name(idx).unwrap();
+            let b = second.indexes.as_ref().unwrap().by_name(idx).unwrap();
+            assert_eq!(
+                a.to_canonical_string(),
+                b.to_canonical_string(),
+                "vaults/{name}: index/{idx}.json is not reproducible"
+            );
+        }
+
+        // And nothing in the corpus should carry an integrity *error*: a
+        // fixture vault that is itself broken teaches the wrong lesson.
+        let errors: Vec<_> = first
+            .indexes
+            .as_ref()
+            .unwrap()
+            .issues
+            .iter()
+            .filter(|i| i.severity == basalt::frontmatter::Severity::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "vaults/{name} has integrity errors: {errors:?}"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 1, "at least one corpus vault was checked");
+    eprintln!("determinism: {checked} corpus vault(s) reproduce");
+}

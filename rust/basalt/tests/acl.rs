@@ -275,3 +275,85 @@ fn group_cycle_terminates() {
     assert!(reachable.contains("g:a") && reachable.contains("g:b"));
     assert!(p.integrity.iter().any(|i| i.code == "GROUP_CYCLE"));
 }
+
+/// §7.1 leaves a suspended user's *reported decider* implementation-dependent,
+/// which §14.2 requires to match.
+///
+/// §7.1: "A suspended or expired user MUST be treated as resolving to **no
+/// groups and no allows**, while still matching ACEs that name it directly for
+/// Deny." Read literally, "name it directly" excludes an `everyone` deny — so
+/// `everyone` would leave the subject set along with the groups, and a right
+/// covered only by an `everyone` deny would come back `deny` by `default`.
+///
+/// This implementation (and the TypeScript reference) keep `everyone` in the
+/// set and report `deny:everyone`. Both reach `deny`; they disagree about which
+/// ACE said so, and §14.2 is explicit that the deciding ACE is part of the
+/// assertion because "two implementations can agree on 'denied' for different
+/// reasons and only one of them is following §8.4".
+///
+/// The corpus's one suspended case does not discriminate: on
+/// `Notes/Other.md` an explicit `O3` deny naming `u:gone` directly is ordered
+/// first, so the `everyone` allow beside it is never consulted either way.
+///
+/// Keeping `everyone` is the better reading on the merits — §7.1's own
+/// justification is that "suspending an account must never widen access", and
+/// dropping `everyone` discards a deny that applied a moment earlier — but the
+/// text says "directly", so this is pinned here rather than assumed.
+#[test]
+fn suspended_user_decider_is_underspecified() {
+    use basalt::acl::{Decision, EvalOpts};
+
+    let users = vec![User {
+        id: "u:gone".into(),
+        display: None,
+        status: Some("suspended".into()),
+        expires: None,
+    }];
+    let principals = Principals::new(users, Vec::new(), BTreeMap::new());
+
+    let descriptors: Yaml = serde_yaml_ng::from_str(
+        "Notes/Any.md:\n  dacl:\n    - {id: X1, type: deny, subject: everyone, rights: [read], flags: []}\n",
+    )
+    .unwrap();
+    let store = build_store(Some(&descriptors));
+
+    let r = check_access(
+        &store,
+        &principals,
+        "u:gone",
+        "Notes/Any.md",
+        &["read".to_string()],
+        EvalOpts {
+            bypass_traverse: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.decisions["read"].decision, Decision::Deny);
+    assert_eq!(
+        r.decisions["read"].by, "X1",
+        "an `everyone` deny still bites a suspended user, so it is the decider"
+    );
+
+    // And the other half of §7.1 that is not in doubt: the allows are gone.
+    let descriptors: Yaml = serde_yaml_ng::from_str(
+        "Notes/Any.md:\n  dacl:\n    - {id: Y1, type: allow, subject: everyone, rights: [read], flags: []}\n",
+    )
+    .unwrap();
+    let store = build_store(Some(&descriptors));
+    let r = check_access(
+        &store,
+        &principals,
+        "u:gone",
+        "Notes/Any.md",
+        &["read".to_string()],
+        EvalOpts {
+            bypass_traverse: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.decisions["read"].decision, Decision::Deny);
+    assert_eq!(
+        r.decisions["read"].by, "default",
+        "a suspended user's allows vanish, so no ACE decides it"
+    );
+}

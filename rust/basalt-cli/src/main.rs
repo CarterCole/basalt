@@ -40,6 +40,11 @@ basalt — a Rust implementation of the Basalt Protocol v1 (conformance L0-L4)
   basalt tree     [--principal ID]
                   The visible tree for a principal.
 
+  basalt export   [--vault DIR] --out DIR [--vault-id ULID]
+                  Export the public subset as a complete, servable vault
+                  (§12.6): only nodes granting read and publish to anonymous,
+                  with every index regenerated rather than copied (§8.8).
+
   basalt digest   Print the merkle root over content/ (§10.6).
 
 Transports:
@@ -214,6 +219,45 @@ fn run(args: &Args) -> Result<ExitCode, String> {
             for (path, id) in &minted {
                 println!("{} {}", paint::green(id), path);
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        "export" => {
+            use basalt::vault::ExportOpts;
+            let out = args
+                .get("out")
+                .or_else(|| args.bare.first().map(String::as_str))
+                .ok_or("export: --out DIR is required")?;
+            let mut v = open(args)?;
+            v.reindex(false).map_err(|e| e.to_string())?;
+            let dest = Box::new(FsTransport::new(PathBuf::from(out)));
+            let (summary, _) = v
+                .export(
+                    dest,
+                    ExportOpts {
+                        vault_id: args.get("vault-id").map(str::to_string),
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            println!(
+                "{} {}",
+                paint::bold(&format!("exported to {out}")),
+                paint::dim(&format!("vault {}", summary.vault_id))
+            );
+            for p in &summary.included {
+                println!("  {} {p}", paint::green("public "));
+            }
+            for p in &summary.excluded {
+                println!("  {} {p}", paint::dim("omitted"));
+            }
+            println!(
+                "\n{}",
+                paint::dim(&format!(
+                    "{} published, {} omitted, digest {}",
+                    summary.included.len(),
+                    summary.excluded.len(),
+                    summary.source_digest
+                ))
+            );
             Ok(ExitCode::SUCCESS)
         }
         "digest" => {
