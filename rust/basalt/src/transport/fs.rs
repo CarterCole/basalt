@@ -97,15 +97,32 @@ pub fn now_rfc3339() -> String {
     )
 }
 
+/// The errors a filesystem raises for a key that an object store would simply
+/// not have, PROTOCOL §1.
+///
+/// `get` and `stat` answer NOT_FOUND for these, and `delete` answers success
+/// (§1.2). Three cases, all of which are "this key does not exist" on a bucket:
+///
+/// - **NotFound**, the obvious one.
+/// - **IsADirectory**: `content/Notes` is a folder on disk and not an object,
+///   and §2.1 says folders are virtual and never stored — so no key names it.
+/// - **NotADirectory**: `content/Notes/x.md` where `content/Notes` is a *file*.
+///   A bucket has no opinion about the shape of a key's prefix.
+///
+/// Surfacing any of them as an error would make this transport disagree with
+/// every store the protocol targets, which is the hazard §1.2 names.
+fn is_absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        ErrorKind::NotFound | ErrorKind::IsADirectory | ErrorKind::NotADirectory
+    )
+}
+
 impl Transport for FsTransport {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         match fs::read(self.resolve(key)?) {
             Ok(b) => Ok(Some(b)),
-            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::IsADirectory) => Ok(None),
-            // A directory where a key should be reads as NOT_FOUND rather than
-            // as an error: `content/Notes` is a folder on disk and not an
-            // object, and §2.1 says folders are not stored.
-            Err(e) if e.raw_os_error() == Some(21) => Ok(None),
+            Err(e) if is_absent(&e) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -139,10 +156,32 @@ impl Transport for FsTransport {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        // §1.2: idempotent, and it reports nothing. NotFound is success.
-        match fs::remove_file(self.resolve(key)?) {
+        // §1.2: idempotent, and it reports nothing.
+        //
+        // The invariant worth holding is that `delete` removes exactly what
+        // `get` would have returned, so the two cannot disagree about what an
+        // object is. Anything `get` reads as NOT_FOUND is therefore a no-op
+        // here: a missing path, a directory (§2.1 — folders are virtual and
+        // never stored, so no key names one), and a path whose own prefix is a
+        // file. On a bucket all three are simply absent keys, and a delete of
+        // an absent key succeeds.
+        //
+        // Deciding this from `metadata` rather than from `remove_file`'s error
+        // is not fussiness: `unlink` on a directory is EPERM on macOS and
+        // EISDIR on Linux, so matching error kinds would be a per-platform
+        // list that silently grows a hole on the next platform.
+        let path = self.resolve(key)?;
+        match fs::metadata(&path) {
+            Ok(m) if !m.is_file() => return Ok(()),
+            Err(e) if is_absent(&e) => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        match fs::remove_file(&path) {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            // Lost a race with another writer; §1.2 says the caller learns
+            // nothing from a delete either way.
+            Err(e) if is_absent(&e) => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
@@ -205,7 +244,7 @@ impl Transport for FsTransport {
         let path = self.resolve(key)?;
         let meta = match fs::metadata(&path) {
             Ok(m) => m,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) if is_absent(&e) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
         if !meta.is_file() {

@@ -243,7 +243,34 @@ would silently skip a case. `tests/conformance.rs::corpus_inventory_matches`
 hard-fails if a file holds fewer cases than declared and prints a note on a
 surplus, which is how it surfaced.
 
-## 8. Smaller things
+## 8. §1.2 has a quieter sibling in `get` and `stat`
+
+§1.2 closes the `delete` divergence: a filesystem can report prior existence
+and a bucket cannot, so neither may. Writing the test for it turned up the same
+shape in the two neighbouring operations, which §1 types as
+`key → bytes | NOT_FOUND` and `key → {…} | NOT_FOUND`.
+
+Three filesystem errors all mean "this key does not exist" on an object store,
+and only the first is obvious:
+
+| Condition | Filesystem | Object store |
+|---|---|---|
+| nothing at the path | `NotFound` | absent |
+| the path is a directory | `IsADirectory` on read, `EPERM` (macOS) or `EISDIR` (Linux) on unlink | absent — §2.1 says folders are virtual and never stored, so no key names one |
+| the path's own prefix is a file | `NotADirectory` | absent — a bucket has no opinion about the shape of a key's prefix |
+
+A filesystem transport that surfaces any of them as an error disagrees with
+every store the protocol targets, in exactly the way §1.2 describes. The fix
+here holds the invariant that **`delete` removes exactly what `get` would have
+returned**, decided from `metadata` rather than from `remove_file`'s error kind
+— the unlink error for a directory differs per platform, so matching error
+kinds is a list that silently grows a hole on the next platform.
+
+Worth one sentence in §1, alongside §1.2: "`get` and `stat` answer NOT_FOUND,
+and `delete` succeeds, for any key an object store would not have — including a
+key naming a folder (§2.1) or one whose prefix is itself an object."
+
+## 9. Smaller things
 
 - **§1.2 is printed before §1.1.** The document goes §1 → §1.2 → §1.1 → §2.
   Purely editorial, but §1.1 is referenced constantly and the out-of-order

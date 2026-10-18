@@ -34,7 +34,7 @@ rust/
 cargo test --workspace
 ```
 
-60 tests. The ones that matter most:
+61 tests. The ones that matter most:
 
 - `tests/conformance.rs` and `tests/acl.rs` load the language-neutral corpus in
   `../conformance/` and assert against it. No expectation for behavior the spec
@@ -92,7 +92,10 @@ rather than an async HTTP stack an order of magnitude larger than this crate.
 **Why `delete` returns `()`.** §1.2. The signature *is* the enforcement: there
 is no boolean to branch on, so a caller cannot come to depend on a filesystem's
 ability to report prior existence and then discover the dependency the day the
-vault moves to a bucket.
+vault moves to a bucket. The filesystem transport goes one step further and
+holds the invariant that `delete` removes exactly what `get` would have
+returned, so the two cannot disagree about what counts as an object — see
+finding 8.
 
 **Where §13.3 is nearly free.** Rust's `str` ordering is already UTF-8
 bytewise, so `BTreeMap<String, Json>` *is* the key-sorting rule of §13.1 and

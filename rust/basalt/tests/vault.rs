@@ -737,3 +737,59 @@ fn empty_index_write_is_refused() {
     // there is nothing to destroy.
     v.reindex_opts(IndexWrite::persist()).unwrap();
 }
+
+/// §1.2, one level down from the obvious case.
+///
+/// `content/Notes/x.md` where `content/Notes` is a *file* gives ENOTDIR on a
+/// filesystem, while on an object store that key simply does not exist and the
+/// delete succeeds. A transport that surfaced the error would disagree with
+/// every bucket — the same divergence §1.2 was written to close, which is why
+/// it is tested rather than assumed.
+#[test]
+fn delete_succeeds_when_a_parent_is_a_file() {
+    let dir = tempdir();
+    let t = basalt::transport::FsTransport::new(&dir);
+    t.put(
+        "content/Notes",
+        b"this is a file, not a folder",
+        &PutMeta::default(),
+    )
+    .unwrap();
+
+    assert!(
+        t.delete("content/Notes/x.md").is_ok(),
+        "a key under a non-directory does not exist, so deleting it succeeds"
+    );
+    // And the same shape through `get` and `stat` — §1.2 points at `stat` as
+    // the way to learn whether a key exists, so it had better answer
+    // NOT_FOUND here rather than an OS error.
+    assert_eq!(t.get("content/Notes/x.md").unwrap(), None);
+    assert_eq!(t.stat("content/Notes/x.md").unwrap(), None);
+
+    // The third shape: a real directory, which §2.1 says is never an object,
+    // so no key names it.
+    std::fs::create_dir_all(dir.join("content/Real")).unwrap();
+    assert_eq!(t.get("content/Real").unwrap(), None);
+    assert_eq!(t.stat("content/Real").unwrap(), None);
+    assert!(t.delete("content/Real").is_ok());
+    assert!(
+        dir.join("content/Real").is_dir(),
+        "and deleting a non-object left the directory alone"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A scratch directory under the system temp dir, removed by the caller.
+fn tempdir() -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!(
+        "basalt-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
