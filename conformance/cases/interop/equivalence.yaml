@@ -1,0 +1,87 @@
+# The equivalence questions, INTEROP §9.
+#
+# These are asked of every mounted surface and the answers must agree. They
+# are written against conformance/vaults/minimal, whose ACLs make u:reader a
+# principal that can list Notes/ but not read Notes/Columns.md — the shape
+# that catches a surface filtering by the wrong thing.
+basalt: 1
+spec: "INTEROP §9"
+vault: vaults/minimal
+
+principals:
+  - {id: "u:carter", note: "owner; full_control on everything"}
+  - {id: "u:reader", note: "member of g:staff; read on Notes/ except Columns.md"}
+  - {id: "anonymous", note: "denied everything: the vault is gated (§12.2)"}
+
+cases:
+  - id: E1-visible-set
+    question: "Which nodes can this principal see?"
+    ask: nodes
+    surfaces: [rest, graphql, jsonrpc, mcp, connect, webdav]
+    expect:
+      "u:carter": ["Assets/diagram.png", "Notes/Columns.md", "Notes/Hexes.md", "Notes/Start Here.md"]
+      "u:reader": ["Assets/diagram.png", "Notes/Hexes.md", "Notes/Start Here.md"]
+      "anonymous": []
+    note: >
+      A principal who cannot list the root is denied the WebDAV mount outright;
+      a runner treats that denial as the empty set, since it is the same answer
+      in DAV's vocabulary.
+
+  - id: E2-same-bytes
+    question: "What are the bytes and metadata of this node?"
+    ask: {operation: node, path: "Notes/Hexes.md"}
+    principal: "u:reader"
+    surfaces: [rest, raw, graphql, jsonrpc, mcp, connect, webdav]
+    expect:
+      title: Hexagons
+      kind: note
+      identical_text_across_surfaces: true
+      redacted_edge: {raw: Columns, to: redacted}
+
+  - id: E3-forbidden
+    question: "A node this principal may discover but not read."
+    ask: {operation: node, path: "Notes/Columns.md"}
+    principal: "u:reader"
+    surfaces: [rest, graphql, jsonrpc, mcp, connect, webdav]
+    expect: {fault: forbidden}
+
+  - id: E4-not-found
+    question: "A node that does not exist."
+    ask: {operation: node, path: "Notes/Nope.md"}
+    principal: "u:reader"
+    surfaces: [rest, graphql, jsonrpc, mcp, connect, webdav]
+    expect: {fault: not_found}
+    note: >
+      E3 and E4 must never swap. A 403 on a path the requester was not allowed
+      to discover confirms that path exists (§12.3).
+
+  - id: E5-withheld
+    question: "A path inside the protocol's own trees."
+    ask: {operation: node}
+    paths: ["index/nodes.json", "meta/acl/Notes/acl.yaml", "principals/users.yaml",
+            "basalt.yaml", "history/x"]
+    principal: "u:carter"
+    surfaces: [rest, raw, graphql, jsonrpc, mcp, connect, webdav]
+    expect: {fault: not_found}
+    note: >
+      Withheld from everyone, including full_control: these are the indexes,
+      the ACLs and the principal list (§8.8, §12.4). not_found rather than
+      forbidden, because a 403 confirms the key exists.
+
+  - id: E6-cache-isolation
+    question: "After warming the cache as one principal, what does another see?"
+    ask: {operation: list, folder: "Notes/"}
+    orders: [["u:carter", "u:reader"], ["u:reader", "u:carter"]]
+    surfaces: [rest, graphql, jsonrpc, mcp, connect, webdav, feeds, rdf]
+    expect:
+      "u:carter": {includes: "Notes/Columns.md"}
+      "u:reader": {excludes: "Notes/Columns.md"}
+    note: >
+      Run in both orders. A cache keyed on anything less than the subject set
+      serves whichever principal arrived first, and that failure is invisible
+      to a suite that only ever asks as one principal.
+
+  - id: E7-descriptions-agree
+    question: "Do the descriptions of the operations agree with each other?"
+    compare: [operation_table, "protocol/basalt.proto", graphql_sdl, openapi_document]
+    expect: {same_operation_set: true}

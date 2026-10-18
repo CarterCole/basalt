@@ -227,6 +227,7 @@ publish:
   audience: gated               # public | gated | private  (§12.2)
   home: Notes/Start Here.md     # path of the entry node
   theme: basalt-default
+  interop: [P-REST, P-MCP]      # interop profiles served  (§17, INTEROP §10)
 index:
   stale_policy: rebuild         # rebuild | serve-stale | refuse  (§10.6)
 security:
@@ -1140,6 +1141,14 @@ L0–L2 make a vault readable and indexable; a static site generator needs
 exactly those. L3 adds enforcement, L4 adds serving it over HTTP, L5 adds
 time travel.
 
+Beyond L4, an implementation MAY declare **interop profiles** — the same read
+surface in another protocol's vocabulary (REST/OpenAPI, GraphQL, JSON-RPC,
+MCP, gRPC, WebDAV, syndication, RDF). Profiles are orthogonal to levels and
+are specified in [INTEROP.md](INTEROP.md) §10; a vault declares them in
+`publish.interop` (§3.1). They are profiles rather than levels because they
+do not stack: speaking GraphQL implies nothing about speaking WebDAV, and
+neither is a prerequisite for the other.
+
 ### 14.2 The fixture corpus
 
 `conformance/` holds language-neutral cases. Every implementation ships a
@@ -1155,6 +1164,7 @@ conformance/
     frontmatter/*.yaml     parsing, id extraction, error recovery
     links/*.yaml           content → expected edge list
     acl/*.yaml             principals + descriptors + request → decision
+    interop/*.yaml         per-surface requirements and the equivalence questions
   vaults/<name>/           whole vaults with expected index output
 ```
 
@@ -1228,6 +1238,37 @@ The `basalt` integer in the manifest is the major version. Within a major
 version, additions MUST be backward compatible: new optional keys, new
 capabilities, new index kinds. A reader MUST ignore what it does not
 recognize (§2.3).
+
+---
+
+## 17. Interoperability surfaces
+
+§12 defines one HTTP read surface. A gatekeeper MAY additionally serve the
+same vault as REST with an OpenAPI document, GraphQL, JSON-RPC, the Model
+Context Protocol, gRPC/Connect, read-only WebDAV, Atom/RSS with a sitemap,
+and JSON-LD/Turtle. Those surfaces are specified in
+[INTEROP.md](INTEROP.md), which is normative, and declared per vault in
+`publish.interop` (§3.1).
+
+Three rules from that annex belong here, because they are statements about
+§8 rather than about any protocol:
+
+1. **One enforcement point.** Every surface MUST route through a single
+   principal-scoped view of the vault, and that view MUST be the only code
+   that evaluates §8.4, applies the §12.3 404/403 split, refuses the §12.4
+   withheld trees and keys the §12.5 cache by subject set. Re-deriving any of
+   them per protocol is a defect even when the output happens to be correct.
+2. **One meaning per denial.** `not_found` MUST stay ambiguous between "no
+   such object" and "you may not discover it" in every protocol's vocabulary
+   (INTEROP §1.3), including in status codes, error payloads and listings.
+3. **Read-only.** Every surface in the annex is a read surface. A write
+   surface needs §11 history and §8's write rights settled first, so v1 has
+   none, and a surface MUST refuse mutating requests rather than silently
+   ignoring them.
+
+Adding a protocol therefore adds translation, never policy. INTEROP §9 lists
+the questions a conformance runner asks of every mounted surface to check
+that this held.
 
 Changes that would alter the bytes of a canonically serialized index, the
 outcome of link resolution, or the result of an ACL evaluation require a major

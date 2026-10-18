@@ -1,0 +1,273 @@
+// The Basalt read service — INTEROP §5.
+//
+// This file is the gRPC/Connect schema for the same operations every other
+// surface exposes. The reference implementation serves it over Connect with
+// the JSON codec only (no HTTP/2, so no binary gRPC in-process); generate a
+// client with `buf generate`, or put a Connect-aware proxy in front to speak
+// binary gRPC or gRPC-Web.
+//
+// Two deliberate choices keep one wire shape across every surface:
+//
+//   1. Every multi-word field carries json_name equal to its own snake_case
+//      name, overriding proto3 JSON's lowerCamelCase default. A Connect JSON
+//      response is therefore byte-identical to the REST response for the same
+//      operation, and the conformance suite can compare them directly.
+//   2. Rights, kinds and decisions are `string`, not proto enums. A proto enum
+//      serializes to JSON as its value name, which would force either
+//      SCREAMING_CASE on the wire or enum values that collide in the package
+//      scope. The protocol's own vocabulary (§8.1, §5.1) wins over proto
+//      convention, and an unknown value from a newer vault stays readable.
+//
+// Everything here is read-only: PROTOCOL §12 defines a read surface.
+
+syntax = "proto3";
+
+package basalt.v1;
+
+option go_package = "basalt/v1;basaltv1";
+option java_package = "org.basalt.v1";
+option java_multiple_files = true;
+
+service BasaltRead {
+  // The public subset of the manifest (§3.1).
+  rpc GetManifest(GetManifestRequest) returns (Manifest);
+  // The principal this request reduced to, and its subject set (§8.4).
+  rpc GetIdentity(GetIdentityRequest) returns (Identity);
+  // One node: metadata, text and edges, if the principal holds `read` (§12.3).
+  rpc GetNode(GetNodeRequest) returns (NodeResponse);
+  // Direct entries of a folder, filtered to those with `list`.
+  rpc ListFolder(ListFolderRequest) returns (FolderListing);
+  // Every readable node entry, in §13.3 order.
+  rpc ListNodes(ListNodesRequest) returns (NodeCatalogue);
+  // Out-edges and backlinks, redacted in place per §9.5.
+  rpc GetLinks(GetLinksRequest) returns (LinkSet);
+  // Postings filtered to readable nodes, not merely re-ranked (§12.5).
+  rpc Search(SearchRequest) returns (SearchResult);
+  // The navigable tree, pruned to what is visible.
+  rpc GetTree(GetTreeRequest) returns (TreeResponse);
+  // Tags and the readable nodes carrying them (§9.6).
+  rpc GetTags(GetTagsRequest) returns (TagListing);
+  // Readable nodes by store mtime, newest first.
+  rpc GetRecent(GetRecentRequest) returns (RecentResponse);
+  // Effective rights and the deciding ACE per right; needs `read_acl` (§8.7).
+  rpc GetEffectiveRights(GetEffectiveRightsRequest) returns (Effective);
+}
+
+// ----------------------------------------------------------------- content
+
+// A node entry as it appears in index/nodes.json (§10.1).
+//
+// Fields 20+ are set only by the operation named on them; they are part of
+// this message rather than a near-duplicate one because the JSON surfaces
+// return a node entry with the extra member inlined.
+message NodeEntry {
+  string path = 1;
+  string id = 2;
+  string kind = 3;                                       // §5.1: note|data|asset|opaque
+  string title = 4;
+  int64 size = 5;
+  string content_hash = 6 [json_name = "content_hash"];  // "sha256:<64 hex>"
+  // Store etag. Excluded from cross-implementation comparison (§13.2).
+  string etag = 7;
+  bool publish = 8;
+  repeated string tags = 9;
+  repeated string aliases = 10;
+  repeated Heading headings = 11;
+  // Integrity codes for this node (§10.8), not prose.
+  repeated string errors = 12;
+
+  // Search only: the summed term frequency for the query.
+  optional int32 score = 20;
+  // GetRecent only: store mtime, RFC 3339. Never load-bearing (§1).
+  optional string mtime = 21;
+}
+
+message Heading {
+  int32 level = 1;
+  string slug = 2;
+  string text = 3;
+}
+
+// A reference to a node, as listings, backlinks and trees carry it.
+// `id` is the literal string "redacted" and `path` is unset when §9.5 applies.
+message Entry {
+  string id = 1;
+  optional string path = 2;
+  optional string title = 3;
+  optional string kind = 4;
+}
+
+// An out-edge (§10.2). `to` unset means dangling or external; `to` equal to
+// "redacted" means the target exists and this principal may not see it (§9.5).
+message LinkEdge {
+  string from = 1;
+  optional string to = 2;
+  string kind = 3;                                             // §9.1: wiki|embed|md|external|tag
+  string raw = 4;
+  optional string alias = 5;
+  optional string anchor = 6;
+  bool anchor_resolved = 7 [json_name = "anchor_resolved"];
+  bool ambiguous = 8;
+  // The competing targets when `ambiguous` is set (§9.2).
+  repeated string candidates = 9;
+  int32 line = 10;
+  int32 col = 11;
+  optional Entry target = 12;
+}
+
+message LinkSet {
+  string path = 1;
+  repeated LinkEdge out = 2;
+  repeated Entry backlinks = 3;
+}
+
+// -------------------------------------------------------------- operations
+
+message GetManifestRequest {}
+
+message Manifest {
+  int32 basalt = 1;
+  VaultInfo vault = 2;
+  PublishInfo publish = 3;
+  string index_state = 4 [json_name = "index_state"];  // §10.6: fresh|stale|rebuilt
+}
+
+message VaultInfo {
+  string id = 1;
+  optional string title = 2;
+}
+
+message PublishInfo {
+  string audience = 1;                   // §12.2: public|gated|private
+  optional string home = 2;
+}
+
+message GetIdentityRequest {}
+
+message Identity {
+  string principal = 1;
+  optional string display_name = 2 [json_name = "display_name"];
+  // The effective subject set used by §8.4 step 1.
+  repeated string subjects = 3;
+  bool anonymous = 4;
+}
+
+message GetNodeRequest {
+  string path = 1;
+  // Default true.
+  optional bool include_text = 2 [json_name = "include_text"];
+  // Default false. Never a presigned URL: §12.4 keeps those out of responses
+  // that can be cached by a client that does not know they are bearer tokens.
+  optional bool include_bytes = 3 [json_name = "include_bytes"];
+}
+
+message NodeResponse {
+  NodeEntry node = 1;
+  string media_type = 2 [json_name = "media_type"];
+  LinkSet links = 3;
+  optional string text = 4;
+  optional string base64 = 5;
+}
+
+message ListFolderRequest {
+  // Folder path with a trailing slash, or "" for the root.
+  string folder = 1;
+}
+
+message FolderListing {
+  string folder = 1;
+  repeated Entry entries = 2;
+  repeated string folders = 3;
+}
+
+message ListNodesRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  bool published = 3;
+}
+
+message NodeCatalogue {
+  int32 total = 1;
+  int32 offset = 2;
+  int32 limit = 3;
+  repeated NodeEntry entries = 4;
+}
+
+message GetLinksRequest {
+  string path = 1;
+}
+
+message SearchRequest {
+  string q = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message SearchResult {
+  string query = 1;
+  int32 total = 2;
+  int32 offset = 3;
+  // Node entries with `score` set.
+  repeated NodeEntry hits = 4;
+}
+
+message GetTreeRequest {}
+
+message TreeResponse {
+  // Unset when the principal may not list the root.
+  optional TreeNode tree = 1;
+}
+
+message TreeNode {
+  string folder = 1;
+  string title = 2;
+  repeated Entry entries = 3;
+  repeated TreeNode folders = 4;
+}
+
+message GetTagsRequest {}
+
+message TagListing {
+  repeated TagPosting tags = 1;
+}
+
+message TagPosting {
+  string tag = 1;
+  repeated Entry nodes = 2;
+}
+
+message GetRecentRequest {
+  int32 limit = 1;
+  // Default true.
+  optional bool published = 2;
+}
+
+message RecentResponse {
+  // Node entries with `mtime` set.
+  repeated NodeEntry entries = 1;
+}
+
+message GetEffectiveRightsRequest {
+  // Vault path, or "" for the root folder.
+  string path = 1;
+  // Defaults to the caller.
+  optional string principal = 2;
+}
+
+message Effective {
+  string principal = 1;
+  string path = 2;
+  // The rights that evaluate to allow (§8.1).
+  repeated string granted = 3;
+  // Right name -> the ACE that decided it. Every right in §8.1 appears.
+  map<string, Decision> decisions = 4;
+  // The ancestor whose traverse check failed (§8.5), when one did.
+  optional string failed_at = 5 [json_name = "failed_at"];
+}
+
+message Decision {
+  string decision = 1;                                  // allow|deny
+  // The deciding ACE, or the rule that stood in for one (§8.7).
+  string by = 2;
+  optional string failed_at = 3 [json_name = "failed_at"];
+}

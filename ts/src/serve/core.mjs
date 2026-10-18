@@ -46,7 +46,6 @@ export const FAULTS = {
   unauthenticated:    { status: 401, connect: 'unauthenticated',    rpc: -32001 },
   bad_request:        { status: 400, connect: 'invalid_argument',   rpc: -32602 },
   method_not_allowed: { status: 405, connect: 'unimplemented',      rpc: -32601 },
-  unsupported_media:  { status: 415, connect: 'invalid_argument',   rpc: -32602 },
   internal:           { status: 500, connect: 'internal',           rpc: -32603 },
 };
 

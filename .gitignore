@@ -5,3 +5,6 @@ target/
 __pycache__/
 .venv/
 *.log
+
+# Static export output (regenerate with `basalt export`)
+dist/

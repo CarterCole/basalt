@@ -3,13 +3,19 @@
 // conforming implementation: without it, "is my private note actually
 // private" is unanswerable.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Vault, INDEX_KEYS } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { S3Transport } from '../src/transport/s3.mjs';
-import { Gatekeeper } from '../src/gatekeeper.mjs';
+import { Gatekeeper, ALL_SURFACES } from '../src/gatekeeper.mjs';
+import { Router } from '../src/serve/router.mjs';
 import { Site } from '../src/web/site.mjs';
+import { openapiDocument } from '../src/serve/rest.mjs';
+import { printSchema } from '../src/serve/graphql.mjs';
+import { mcpMethods } from '../src/serve/mcp.mjs';
+import { serveStdio } from '../src/serve/jsonrpc.mjs';
+import { Surface } from '../src/serve/core.mjs';
 import { exportSite } from '../src/web/export.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
 import { RIGHTS } from '../src/acl.mjs';
@@ -68,9 +74,27 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  Mint node ids for unbound objects (§4.3).
 
   basalt serve   [--vault DIR | --bucket B] [--port N] [--principal ID]
-                 Serve the publish site and the API (§12). --principal forces
-                 an identity for local testing; without it every request is
-                 anonymous. --api-only omits the HTML site.
+                 [--surfaces LIST] [--public-url URL] [--cors ORIGIN]
+                 Serve the publish site and every interop surface (§12,
+                 INTEROP): REST+OpenAPI, GraphQL, JSON-RPC, MCP, Connect/gRPC
+                 (JSON), read-only WebDAV, Atom/RSS/sitemap/OpenSearch and
+                 RDF. --principal forces an identity for local testing;
+                 without it every request is anonymous. --api-only omits the
+                 HTML site. --surfaces picks a subset of
+                 rest,graphql,jsonrpc,mcp,connect,webdav,feeds,rdf.
+                 --public-url sets the absolute base used by feeds and RDF
+                 IRIs behind a proxy. --cors is off by default on purpose:
+                 these responses are per-principal.
+
+  basalt mcp     [--vault DIR | --bucket B] [--principal ID]
+                 Serve one vault to an MCP client over stdio (INTEROP §4.2).
+                 Nothing but JSON-RPC goes to stdout; diagnostics go to
+                 stderr. The principal is fixed for the life of the process.
+
+  basalt schema  <openapi|graphql|proto|discovery> [--vault DIR] [--base URL]
+                 Print the machine-readable description of a surface: the
+                 OpenAPI 3.1 document, the GraphQL SDL, the protobuf service,
+                 or the /.well-known/basalt discovery document.
 
   basalt effective --path P --principal ID
                  Effective rights with the deciding ACE per right (§8.7).
@@ -191,21 +215,47 @@ try {
       const v = await open();
       await v.reindex();
       const forced = flag('principal');
+      const picked = flag('surfaces');
+      const chosen = picked && picked !== true
+        ? new Set(String(picked).split(',').map((x) => x.trim()).filter(Boolean))
+        : new Set(ALL_SURFACES);
+      for (const name of chosen) {
+        if (!ALL_SURFACES.includes(name)) {
+          throw new Error(`unknown surface ${name}; known: ${ALL_SURFACES.join(', ')}`);
+        }
+      }
       const g = new Gatekeeper(v, {
         identify: () => forced ?? 'anonymous',
         delivery: flag('delivery', 'proxy'),
         site: args.includes('--api-only') ? null : new Site(v),
+        surfaces: chosen,
+        publicUrl: flag('public-url') || undefined,
+        cors: flag('cors') || null,
       });
       const port = Number(flag('port', 4380));
       await g.listen(port);
-      console.log(`gatekeeper on http://127.0.0.1:${port}`);
+      const origin = `http://127.0.0.1:${port}`;
+      console.log(`gatekeeper on ${origin}`);
       console.log(C.dim(`  audience=${v.manifest.publish?.audience} ` +
         `principal=${forced ?? 'anonymous'}`));
       if (!args.includes('--api-only')) {
         console.log(C.dim('  the publish site is at /  (pass --api-only to serve just the API)'));
       }
-      console.log(C.dim('  GET /api/v1/{manifest,tree,node/<path>,raw/<path>,' +
-        'list/<folder>,links/<path>,search?q=,effective?path=}'));
+      // One line per surface, so the thing to paste into a client is on screen.
+      const lines = {
+        rest: 'GET  /api/v1/{manifest,me,tree,nodes,node/<path>,raw/<path>,list/<folder>,links/<path>,search?q=,tags,effective?path=}',
+        graphql: 'POST /graphql          · SDL at /graphql/schema.graphql',
+        jsonrpc: 'POST /rpc              · basalt.operations lists the methods',
+        mcp: 'POST /mcp              · or `basalt mcp` over stdio',
+        connect: 'POST /basalt.v1.BasaltRead/<Method>  (JSON codec)',
+        webdav: 'DAV  /dav/             · read-only; mount it in Finder or rclone',
+        feeds: 'GET  /feed.atom /feed.xml /sitemap.xml /opensearch.xml /robots.txt',
+        rdf: 'GET  /graph.jsonld /graph.ttl',
+      };
+      for (const name of ALL_SURFACES) {
+        if (chosen.has(name)) console.log(C.dim(`  ${lines[name]}`));
+      }
+      console.log(C.dim(`  every surface at once: ${origin}/.well-known/basalt`));
       break;
     }
 
@@ -257,6 +307,44 @@ try {
           `indexes were rebuilt from the public subset only (§12.6)`));
       }
       break;
+    }
+
+    case 'mcp': {
+      // The stdio transport an MCP client spawns. stdout carries JSON-RPC and
+      // nothing else, so the usual startup chatter goes to stderr.
+      const v = await open();
+      await v.reindex();
+      const principal = flag('principal', 'anonymous');
+      const surface = new Surface(v);
+      process.stderr.write(
+        `basalt mcp: vault ${v.manifest.vault.id} as ${principal}\n`);
+      await serveStdio(mcpMethods(surface, principal));
+      break;
+    }
+
+    case 'schema': {
+      const which = args[1];
+      const base = flag('base', 'http://127.0.0.1:4380');
+      if (which === 'proto') {
+        const file = new URL('../../protocol/basalt.proto', import.meta.url);
+        process.stdout.write(await readFile(file, 'utf8'));
+        break;
+      }
+      if (which === 'graphql') {
+        process.stdout.write(printSchema() + '\n');
+        break;
+      }
+      const v = await open();
+      if (which === 'openapi') {
+        process.stdout.write(canonicalJson(openapiDocument(new Surface(v), { baseUrl: base })));
+        break;
+      }
+      if (which === 'discovery') {
+        await v.reindex();
+        process.stdout.write(canonicalJson(new Router(v, { site: null }).discovery(base)));
+        break;
+      }
+      throw new Error('schema takes one of: openapi, graphql, proto, discovery');
     }
 
     case 'conformance-regen': {

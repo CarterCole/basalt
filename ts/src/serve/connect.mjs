@@ -36,9 +36,13 @@ export async function handleConnect(surface, principal, req, res, { body, send, 
   if (!m || m[1] !== SERVICE) return false;
 
   const op = OP_BY_PROTO.get(m[2]);
-  const fail = (code, message) => send(res, STATUS[code] ?? 500, { code, message }, {
-    'content-type': 'application/json',
-  });
+  // Returns true: every exit from this function reports whether the request
+  // was answered here, and a `fail` that answered but reported false would
+  // let the router send a second response over the top of it.
+  const fail = (code, message) => {
+    send(res, STATUS[code] ?? 500, { code, message }, { 'content-type': 'application/json' });
+    return true;
+  };
 
   if (!op) return fail('unimplemented', `${SERVICE}/${m[2]} is not implemented`);
 

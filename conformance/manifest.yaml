@@ -15,6 +15,12 @@ suites:
   - {file: cases/links/resolution.yaml,       level: L2, spec: "9.2", cases: 13}
   - {file: cases/acl/evaluation.yaml,         level: L3, spec: "8.4", cases: 24}
 
+# Interop suites are keyed by profile rather than level (§17): they describe
+# the same read surface in other protocols, and none is a prerequisite for
+# another.
+  - {file: cases/interop/surfaces.yaml,      profile: "*",         spec: "INTEROP 1-8", cases: 9}
+  - {file: cases/interop/equivalence.yaml,   profile: P-INTEROP,   spec: "INTEROP 9",   cases: 7}
+
 vaults:
   - {dir: vaults/minimal, level: L2, note: "byte-exact index reproduction (§13)"}
 
@@ -27,3 +33,16 @@ levels:
   L3: Security
   L4: Gatekeeper
   L5: History
+
+# Profiles are orthogonal to levels and each requires L4 (INTEROP §10). A
+# runner skips a profile's suite unless the implementation declares it.
+profiles:
+  P-REST: REST with an OpenAPI 3.1 document
+  P-GRAPHQL: GraphQL with served SDL
+  P-JSONRPC: JSON-RPC 2.0
+  P-MCP: Model Context Protocol, HTTP and stdio
+  P-GRPC: gRPC/Connect over basalt.proto
+  P-WEBDAV: read-only WebDAV class 1
+  P-FEEDS: Atom, RSS, sitemap, OpenSearch
+  P-RDF: JSON-LD and Turtle
+  P-INTEROP: two or more of the above, held equivalent

@@ -246,7 +246,6 @@ export function problem(code, detail) {
     unauthenticated: 'Authentication required',
     bad_request: 'Bad request',
     method_not_allowed: 'Method not allowed',
-    unsupported_media: 'Unsupported media type',
     internal: 'Internal error',
   };
   const body = {
