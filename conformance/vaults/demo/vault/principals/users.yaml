@@ -1,0 +1,3 @@
+users:
+  - {id: u:carter, display: Carter Cole, status: active}
+  - {id: u:editor, display: An Editor, status: active}

@@ -1,0 +1,17 @@
+{
+  "basalt": 1,
+  "count": 4,
+  "generated": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "root": "sha256:3aae36e38c2a4954634daefc2c9fec2960987ada999b38df5faf26579369b069",
+  "source_digest": "sha256:3aae36e38c2a4954634daefc2c9fec2960987ada999b38df5faf26579369b069",
+  "tree": {
+    "Assets/": "sha256:bfcfa6572f674aa730ea29af31bdf6834aa7f2d97fd50651c164e56ff42db720",
+    "Assets/diagram.png": "sha256:e141376185f8605dd695b35781b580d99c012a99aa7a697de815e4affc8ec600",
+    "Notes/": "sha256:3d2649777903bfd297b70ec473095991ca5be691cd0598e2023037a29b5ff48f",
+    "Notes/Columns.md": "sha256:7053bba99323b1d8a8dabbced6fd16fb71cbc9d84cb630b7ab7e62b8ab38618e",
+    "Notes/Hexes.md": "sha256:c5c1f6fbc37ee9947ee45265736629de375d4adbc968d3ee55451a7142a8b8c8",
+    "Notes/Start Here.md": "sha256:a484573df52ea83c0518792cf74ab84f75cc87719aa02886ea5543ff1d30d1e5"
+  },
+  "vault": "01JBQ7X8Z4N3VYK9M2T5HRWC6P"
+}

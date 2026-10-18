@@ -18,7 +18,7 @@ import regex as re2
 
 from . import yamlio
 from .canonical import ABSENT
-from .frontmatter import Note, is_ulid, kind_for, parse_note
+from .frontmatter import Note, kind_for, parse_note, ulid_problem
 from .keys import (
     basename,
     compare_utf8,
@@ -302,8 +302,23 @@ def build_indexes(
             # the folder's entry sidecar, so the id still survives a rename
             # performed by a tool that has never heard of this protocol.
             sidecar_id = sidecar.get("id") if sidecar else None
-            if sidecar_id is not None and is_ulid(str(sidecar_id)):
-                node.id = str(sidecar_id).lower()
+            if sidecar_id is not None:
+                problem = ulid_problem(str(sidecar_id).lower())
+                if problem is None:
+                    node.id = str(sidecar_id).lower()
+                else:
+                    # A malformed sidecar id must be as loud as a malformed
+                    # frontmatter one. Dropping it silently would leave the
+                    # object reported only as UNBOUND_NODE, which says a
+                    # sidecar entry is missing — not that one is present and
+                    # wrong by a character.
+                    node.errors.append(
+                        {
+                            "severity": "error",
+                            "code": "INVALID_ID",
+                            "detail": f"{sidecar_id}: {problem}",
+                        }
+                    )
             sidecar_title = sidecar.get("title") if sidecar else None
             node.title = sidecar_title if sidecar_title is not None else stem(basename(path))
             if kind == "data":

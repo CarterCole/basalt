@@ -1,0 +1,21 @@
+# Key validation per PROTOCOL §1.1. Every implementation at L0 must agree.
+level: L0
+spec: "1.1"
+cases:
+  - {name: simple, key: "content/Notes/Hexes.md", valid: true}
+  - {name: nested-deep, key: "content/a/b/c/d/e/f.md", valid: true}
+  - {name: unicode-nfc, key: "content/Notes/Café.md", valid: true}
+  - {name: spaces-ok, key: "content/Field Notes/Start Here.md", valid: true}
+  - {name: manifest, key: "basalt.yaml", valid: true}
+
+  - {name: empty, key: "", valid: false, error: KEY_EMPTY}
+  - {name: leading-slash, key: "/content/a.md", valid: false, error: KEY_LEADING_SLASH}
+  - {name: trailing-slash, key: "content/a/", valid: false, error: KEY_TRAILING_SLASH}
+  - {name: double-slash, key: "content//a.md", valid: false, error: KEY_EMPTY_SEGMENT}
+  - {name: dot-segment, key: "content/./a.md", valid: false, error: KEY_DOT_SEGMENT}
+  - {name: dotdot-segment, key: "content/../a.md", valid: false, error: KEY_DOT_SEGMENT}
+  - {name: nul-byte, key: "content/a\u0000b.md", valid: false, error: KEY_CONTROL_CHAR}
+  - {name: control-char, key: "content/a\u0001b.md", valid: false, error: KEY_CONTROL_CHAR}
+  - {name: newline, key: "content/a\nb.md", valid: false, error: KEY_CONTROL_CHAR}
+  # NFD "Cafe" + combining acute must be rejected; only NFC is storable.
+  - {name: not-nfc, key: "content/Café.md", valid: false, error: KEY_NOT_NFC}

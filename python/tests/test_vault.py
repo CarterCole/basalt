@@ -548,3 +548,92 @@ def test_index_freshness_is_decided_by_digest_not_timestamps() -> None:
     state = vault.index_state()
     assert state.fresh is False
     assert state.label == "stale"
+
+
+# ------------------------------------------------------- near-miss node ids
+
+
+def test_a_short_ulid_says_why_it_was_rejected() -> None:
+    """§4.1 — 26 characters. A 25-character id is the confusing failure.
+
+    The object goes unbound (§4.3) and takes every inbound link with it, since
+    §9.2 can only resolve to a node that has an id — so the report has to name
+    the reason, not just the id.
+    """
+    indexes = build(
+        {
+            "content/Short.md": (
+                "---\nbasalt:\n  id: 01jbq10000000000000000000\n---\n# Short\n"
+            )
+        }
+    ).reindex(generated=EPOCH)
+    entry = next(
+        e for e in indexes["integrity"]["entries"] if e["code"] == "INVALID_ID"
+    )
+    assert entry["severity"] == "error"
+    assert "25 characters; a ULID is 26" in entry["detail"]
+    assert indexes["nodes"]["entries"][0]["id"] is None
+    assert "UNBOUND_NODE" in codes(indexes)
+
+
+def test_a_ulid_with_an_excluded_letter_says_which() -> None:
+    """§4.1 — Crockford base32 omits i, l, o and u."""
+    indexes = build(
+        {
+            "content/Oh.md": (
+                "---\nbasalt:\n  id: o1jbq10000000000000000000l\n---\n# Oh\n"
+            )
+        }
+    ).reindex(generated=EPOCH)
+    detail = next(
+        e["detail"] for e in indexes["integrity"]["entries"] if e["code"] == "INVALID_ID"
+    )
+    assert "illegal character(s)" in detail
+    assert "i, l, o and u" in detail
+
+
+def test_a_malformed_sidecar_id_is_as_loud_as_a_malformed_frontmatter_one() -> None:
+    """§6.1 — an id that is present and wrong is not the same as one missing.
+
+    Dropping it silently would report only UNBOUND_NODE, which reads as "this
+    asset has no sidecar entry" when in fact it has one, off by a character.
+    """
+    indexes = build(
+        {
+            "content/Assets/d.png": "png",
+            "meta/folders/Assets/entries.yaml": (
+                "entries:\n  d.png:\n    id: 01jbq10000000000000000000\n"
+            ),
+        }
+    ).reindex(generated=EPOCH)
+    entry = next(
+        e for e in indexes["integrity"]["entries"] if e["code"] == "INVALID_ID"
+    )
+    assert entry["path"] == "Assets/d.png"
+    assert "25 characters" in entry["detail"]
+    assert indexes["nodes"]["entries"][0]["errors"] == ["INVALID_ID"]
+
+
+def test_an_embed_resolves_by_full_basename_not_only_the_stem() -> None:
+    """§9.2 step 5 — otherwise every ``![[image.png]]`` in the vault dangles.
+
+    The asset normally lives in a different folder from the note that embeds
+    it, so steps 2 and 3 both miss and step 5 has to match ``diagram.png`` and
+    not just ``diagram``.
+    """
+    indexes = build(
+        {
+            "content/Notes/Source.md": (
+                "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n"
+                "# S\n\nAn embed: ![[diagram.png]]\n"
+            ),
+            "content/Assets/diagram.png": "png",
+            "meta/folders/Assets/entries.yaml": (
+                "entries:\n  diagram.png:\n    id: 01jbq100000000000000000004\n"
+            ),
+        }
+    ).reindex(generated=EPOCH)
+    edge = next(e for e in indexes["links"]["entries"] if e["kind"] == "embed")
+    assert edge["to"] == "01jbq100000000000000000004"
+    assert edge["ambiguous"] is False
+    assert "UNRESOLVED_LINK" not in codes(indexes)

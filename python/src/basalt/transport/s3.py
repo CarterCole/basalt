@@ -223,15 +223,21 @@ class S3Transport(Transport):
             mtime=_iso(dt.datetime.now(dt.UTC)),
         )
 
-    def delete(self, key: str) -> bool:
+    def delete(self, key: str) -> None:
+        """Remove one key, reporting nothing about whether it was there (§1.2).
+
+        ``DeleteObject`` answers 204 whether or not the key was present on S3,
+        MinIO and R2 alike, so there is nothing to report in the first place.
+        A gateway that answers 404 instead is still a successful idempotent
+        delete.
+        """
         client = self._load()
         try:
             client.delete_object(Bucket=self.bucket, Key=self._full(key))
         except Exception as err:  # normalized below
             if _is_not_found(err):
-                return False
+                return
             raise
-        return True
 
     # --------------------------------------------------------- optional
 

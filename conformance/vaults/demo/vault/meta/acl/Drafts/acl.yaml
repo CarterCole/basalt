@@ -1,0 +1,16 @@
+# The folder itself is navigable, but its one note withholds `publish`.
+#
+# This is the §12.6 case: an editor reading through a gatekeeper sees the note
+# (they are authenticated, so `publish` does not gate them), while a static
+# export contains no trace of it, because the exporter includes only what
+# grants BOTH `read` and `publish` to `anonymous`.
+folder:
+  owner: u:carter
+  dacl:
+    - {type: allow, subject: everyone, rights: [list, traverse], flags: []}
+entries:
+  Unfinished Thoughts.md:
+    owner: u:carter
+    dacl:
+      - {type: deny, subject: everyone, rights: [publish], flags: []}
+      - {type: allow, subject: g:editors, rights: [editor], flags: []}

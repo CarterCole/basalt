@@ -1,0 +1,116 @@
+# Publish the PUBLIC subset of a Basalt vault to GitHub Pages.
+#
+# What makes this safe is `basalt export` (PROTOCOL §12.6), not this workflow:
+# the exporter includes only nodes granting both `read` and `publish` to the
+# anonymous principal, and rebuilds the indexes from that subset. Pointing
+# Pages at the vault directory instead, or copying index/ across, would
+# publish the private half of the link graph while every page still looked
+# correct.
+#
+# The guard step below fails the build if a withheld node reaches the output.
+
+name: Publish vault to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'conformance/vaults/demo/**'
+      - 'ts/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+    inputs:
+      vault:
+        description: Path to the vault directory
+        default: conformance/vaults/demo/vault
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; never cancel a run that is mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VAULT: ${{ github.event.inputs.vault || 'conformance/vaults/demo/vault' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+
+      - name: Install
+        working-directory: ts
+        run: npm ci
+
+      - name: Check the vault before publishing it
+        working-directory: ts
+        run: node bin/basalt.mjs check --vault "../$VAULT"
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - name: Export the public subset
+        working-directory: ts
+        # base_path is "" for a user/org site and "/repo" for a project site;
+        # configure-pages works it out, and the exporter rewrites every
+        # site-absolute URL to match.
+        run: |
+          node bin/basalt.mjs export \
+            --vault "../$VAULT" \
+            --out ../dist \
+            --base "${{ steps.pages.outputs.base_path }}" \
+            --clean
+
+      - name: Refuse to publish anything withheld
+        run: |
+          set -euo pipefail
+          # Every node the exporter withheld must be absent from the output.
+          # This re-derives the list rather than trusting the export log.
+          node ts/bin/basalt.mjs export --vault "$VAULT" --out /tmp/audit --clean 2>&1 \
+            | sed -n 's/^ *withheld: //p' > /tmp/withheld.txt || true
+          if [ -s /tmp/withheld.txt ]; then
+            echo "Nodes withheld from publication:"
+            cat /tmp/withheld.txt
+            while IFS= read -r p; do
+              [ -z "$p" ] && continue
+              stem="${p%.md}"
+              if [ -e "dist/$stem/index.html" ]; then
+                echo "::error::withheld node was exported: $p"
+                exit 1
+              fi
+              if grep -rqF "$stem" dist/_assets/search-index.json; then
+                echo "::error::withheld node appears in the search index: $p"
+                exit 1
+              fi
+            done < /tmp/withheld.txt
+          fi
+          # The vault's own indexes must never be published (§8.8).
+          if [ -e dist/index/nodes.json ] || [ -e dist/index/links.json ]; then
+            echo "::error::the vault's own indexes were copied into the output"
+            exit 1
+          fi
+          echo "audit passed"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

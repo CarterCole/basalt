@@ -1,0 +1,101 @@
+{
+  "basalt": 1,
+  "entries": [
+    {
+      "aliases": [],
+      "content_hash": "sha256:e141376185f8605dd695b35781b580d99c012a99aa7a697de815e4affc8ec600",
+      "errors": [],
+      "etag": "\"a601b23f607df767c934cda0db47f11e\"",
+      "headings": [],
+      "id": "01jbq100000000000000000004",
+      "kind": "asset",
+      "path": "Assets/diagram.png",
+      "publish": true,
+      "size": 22,
+      "tags": [],
+      "title": "Column jointing, annotated"
+    },
+    {
+      "aliases": [],
+      "content_hash": "sha256:7053bba99323b1d8a8dabbced6fd16fb71cbc9d84cb630b7ab7e62b8ab38618e",
+      "errors": [],
+      "etag": "\"f0934eecc94f396602b39c085f60a4a4\"",
+      "headings": [
+        {
+          "level": 1,
+          "slug": "columns",
+          "text": "Columns"
+        },
+        {
+          "level": 2,
+          "slug": "jointing",
+          "text": "Jointing"
+        }
+      ],
+      "id": "01jbq100000000000000000003",
+      "kind": "note",
+      "path": "Notes/Columns.md",
+      "publish": true,
+      "size": 168,
+      "tags": [
+        "basalt",
+        "geometry"
+      ],
+      "title": "Columns"
+    },
+    {
+      "aliases": [
+        "Hexagons"
+      ],
+      "content_hash": "sha256:c5c1f6fbc37ee9947ee45265736629de375d4adbc968d3ee55451a7142a8b8c8",
+      "errors": [],
+      "etag": "\"6bc285d10cbfa6bf300fe58b6612f042\"",
+      "headings": [
+        {
+          "level": 1,
+          "slug": "hexagons",
+          "text": "Hexagons"
+        }
+      ],
+      "id": "01jbq100000000000000000002",
+      "kind": "note",
+      "path": "Notes/Hexes.md",
+      "publish": true,
+      "size": 241,
+      "tags": [
+        "geometry"
+      ],
+      "title": "Hexagons"
+    },
+    {
+      "aliases": [],
+      "content_hash": "sha256:a484573df52ea83c0518792cf74ab84f75cc87719aa02886ea5543ff1d30d1e5",
+      "errors": [],
+      "etag": "\"b666bf21aad40c4978934bebb21810a2\"",
+      "headings": [
+        {
+          "level": 1,
+          "slug": "start-here",
+          "text": "Start Here"
+        }
+      ],
+      "id": "01jbq100000000000000000001",
+      "kind": "note",
+      "path": "Notes/Start Here.md",
+      "publish": true,
+      "size": 292,
+      "tags": [
+        "entry",
+        "index",
+        "meta",
+        "nav",
+        "nav/root"
+      ],
+      "title": "Start Here"
+    }
+  ],
+  "generated": "1970-01-01T00:00:00Z",
+  "kind": "nodes",
+  "source_digest": "sha256:3aae36e38c2a4954634daefc2c9fec2960987ada999b38df5faf26579369b069",
+  "vault": "01JBQ7X8Z4N3VYK9M2T5HRWC6P"
+}

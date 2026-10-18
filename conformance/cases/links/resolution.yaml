@@ -1,0 +1,124 @@
+# Resolution order, PROTOCOL §9.2. The vault below is shared by all cases.
+level: L2
+spec: "9.2"
+vault:
+  nodes:
+    - {path: "Columns.md",              id: "01jbq000000000000000000001"}
+    - {path: "Notes/Columns.md",        id: "01jbq000000000000000000002"}
+    - {path: "Notes/Hexes.md",          id: "01jbq000000000000000000003", aliases: ["Hexagons", "Six Sides"]}
+    - {path: "Deep/Nest/Columns.md",    id: "01jbq000000000000000000004"}
+    - {path: "Assets/diagram.png",      id: "01jbq000000000000000000005"}
+    - {path: "Alpha/Unique.md",         id: "01jbq000000000000000000006"}
+    - {path: "Alpha/Shared.md",         id: "01jbq000000000000000000007"}
+    - {path: "Beta/Shared.md",          id: "01jbq000000000000000000008"}
+cases:
+  - name: rooted-wins-over-relative
+    from: "Notes/Source.md"
+    target: "/Columns"
+    resolves_to: "01jbq000000000000000000001"
+    by: rooted-path
+    note: Step 1 beats step 2 even though Notes/Columns.md is nearer.
+
+  - name: relative-beats-vault-root
+    from: "Notes/Source.md"
+    target: "Columns"
+    resolves_to: "01jbq000000000000000000002"
+    by: relative-path
+    note: Step 2 before step 3 — the sibling wins over the root-level file.
+
+  - name: relative-with-dotdot
+    from: "Deep/Nest/Source.md"
+    target: "../../Notes/Hexes"
+    resolves_to: "01jbq000000000000000000003"
+    by: relative-path
+
+  - name: vault-root-path
+    from: "Alpha/Source.md"
+    target: "Notes/Hexes"
+    resolves_to: "01jbq000000000000000000003"
+    by: vault-root-path
+
+  - name: alias-match
+    from: "Alpha/Source.md"
+    target: "Hexagons"
+    resolves_to: "01jbq000000000000000000003"
+    by: alias
+
+  - name: alias-case-insensitive
+    from: "Alpha/Source.md"
+    target: "six sides"
+    resolves_to: "01jbq000000000000000000003"
+    by: alias
+    note: Steps 4-5 fold case; steps 1-3 do not.
+
+  - name: unique-basename
+    from: "Zeta/Source.md"
+    target: "Unique"
+    resolves_to: "01jbq000000000000000000006"
+    by: unique-basename
+
+  - name: exact-root-path-beats-basename-and-is-not-ambiguous
+    from: "Zeta/Source.md"
+    target: "Columns"
+    resolves_to: "01jbq000000000000000000001"
+    by: vault-root-path
+    ambiguous: false
+    note: >
+      Three nodes are named Columns.md, but one of them sits at the vault root
+      and so matches at step 3. An exact path match is a definite answer, not
+      an ambiguous name guess, so ambiguity is NOT flagged here even though
+      the basename is shared. Resolution stops at the first hit (§9.2).
+
+  - name: ambiguous-basename-deterministic-tiebreak
+    from: "Zeta/Source.md"
+    target: "Shared"
+    resolves_to: "01jbq000000000000000000007"
+    by: unique-basename
+    ambiguous: true
+    candidates:
+      - "01jbq000000000000000000007"   # Alpha/Shared.md
+      - "01jbq000000000000000000008"   # Beta/Shared.md
+    note: >
+      Shared.md exists only in subfolders, so steps 1-4 all miss and step 5
+      finds two candidates. Listed in §13.3 bytewise path order and the first
+      is chosen: "Alpha/..." < "Beta/...". The flag is set so the author can
+      fix the real problem.
+
+  - name: case-sensitive-path-does-not-match
+    from: "Notes/Source.md"
+    target: "/columns"
+    resolves_to: null
+    by: unresolved
+    note: Step 1 is case-sensitive, and no alias or basename matches "columns".
+
+  - name: embed-asset-by-relative-path
+    from: "Assets/Source.md"
+    target: "diagram.png"
+    resolves_to: "01jbq000000000000000000005"
+    by: relative-path
+
+  - name: asset-embed-by-filename-across-folders
+    from: "Notes/Source.md"
+    target: "diagram.png"
+    resolves_to: "01jbq000000000000000000005"
+    by: unique-basename
+    note: >
+      An image embed normally carries its extension, and the asset normally
+      lives in a different folder from the note. Steps 2 and 3 both miss, so
+      step 5 must match the full basename and not only the stem — otherwise
+      every ![[image.png]] in the vault dangles.
+
+  - name: unresolved-keeps-raw
+    from: "Notes/Source.md"
+    target: "Does Not Exist"
+    resolves_to: null
+    by: unresolved
+    raw: "Does Not Exist"
+
+  - name: anchor-unresolved-node-still-resolves
+    from: "Notes/Source.md"
+    target: "Hexes#no-such-heading"
+    resolves_to: "01jbq000000000000000000003"
+    by: relative-path
+    anchor_resolved: false
+    note: §9.3 — a bad fragment does not make the edge unresolved.

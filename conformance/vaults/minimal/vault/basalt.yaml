@@ -1,0 +1,14 @@
+basalt: 1
+vault:
+  id: 01JBQ7X8Z4N3VYK9M2T5HRWC6P
+  title: Minimal Conformance Vault
+  created: 2026-01-01T00:00:00Z
+publish:
+  audience: gated
+  home: Notes/Start Here.md
+index:
+  stale_policy: rebuild
+security:
+  bypass_traverse: false
+  deny_unresolved: true
+  redact_titles: true

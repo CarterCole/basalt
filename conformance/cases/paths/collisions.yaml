@@ -1,0 +1,25 @@
+# Collision rule, PROTOCOL §2.2. Keys colliding under NFC + case-fold are illegal.
+level: L1
+spec: "2.2"
+cases:
+  - name: case-only-difference
+    keys: ["content/Notes/Hexes.md", "content/Notes/hexes.md"]
+    collides: true
+    # Deterministic: the bytewise-first path (§13.3) is the survivor.
+    survivor: "content/Notes/Hexes.md"
+  - name: folder-case-difference-is-not-a-collision
+    keys: ["content/Notes/a.md", "content/notes/b.md"]
+    collides: false
+    folder_divergence: ["content/Notes/", "content/notes/"]
+    note: >
+      The keys do not fold-equal, so §2.2's collision rule does not apply and
+      both files survive a round trip. But the two folders merge on a
+      case-insensitive store, moving b.md and breaking path-shaped links to
+      it, so this is reported as FOLDER_CASE_DIVERGENCE instead.
+  - name: distinct-names
+    keys: ["content/Notes/Hexes.md", "content/Notes/Columns.md"]
+    collides: false
+  - name: unicode-width-not-a-collision
+    keys: ["content/A.md", "content/Ａ.md"]   # U+FF21 fullwidth A
+    collides: false
+    note: NFC does not fold fullwidth to ASCII; these are genuinely distinct.

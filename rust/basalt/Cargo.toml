@@ -1,0 +1,28 @@
+[package]
+name = "basalt"
+description = "Basalt Protocol v1 — portable knowledge vaults over any key-value store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# The S3-compatible transport. Off by default so the core protocol — indexing,
+# link resolution, ACL evaluation — builds with no cloud dependency at all.
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:tokio"]
+
+[dependencies]
+md-5.workspace = true
+rand.workspace = true
+regex.workspace = true
+serde_yaml_ng.workspace = true
+sha2.workspace = true
+unicode-normalization.workspace = true
+
+aws-config = { version = "1.8", optional = true, default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.119", optional = true, default-features = false, features = ["rt-tokio", "sigv4a"] }
+tokio = { version = "1.49", optional = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+serde_yaml_ng.workspace = true

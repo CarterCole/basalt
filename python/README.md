@@ -127,7 +127,7 @@ tests/
 uv run pytest
 ```
 
-210 tests. The 97 that come from `conformance/` define nothing themselves —
+216 tests. The 97 that come from `conformance/` define nothing themselves —
 every expectation is loaded from the corpus, because §14.2 is explicit that no
 implementation defines its own answers for behavior the spec covers. The rest
 cover the conditions §4–§12 describe in prose that no single fixture exercises

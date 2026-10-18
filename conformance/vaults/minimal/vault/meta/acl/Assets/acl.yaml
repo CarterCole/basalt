@@ -1,0 +1,7 @@
+# Assets inherit read from here rather than from the root, because the root
+# grants navigation only (§8.6). An embedded image must be readable by anyone
+# who can read the note that embeds it, or the note renders with a hole in it.
+folder:
+  owner: u:carter
+  dacl:
+    - {type: allow, subject: everyone, rights: [read, list, traverse], flags: [oi]}

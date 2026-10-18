@@ -75,12 +75,40 @@ def split_frontmatter(text: str) -> Split:
     return Split(None, text, 1)
 
 
+#: §4.1: a ULID is 26 characters of Crockford base32, which omits i, l, o and
+#: u so they cannot be confused with 1, 1, 0 and v.
+ULID_LENGTH = 26
 _ULID_RE = re.compile(r"^[0-9a-hjkmnp-tv-z]{26}$")
+_ULID_ALPHABET = frozenset("0123456789abcdefghjkmnpqrstvwxyz")
 
 
 def is_ulid(value: object) -> bool:
     """True for a well-formed Crockford base32 ULID (§4.1)."""
     return isinstance(value, str) and _ULID_RE.match(value.lower()) is not None
+
+
+def ulid_problem(value: object) -> str | None:
+    """Why ``value`` is not a ULID, in words, or ``None`` if it is one.
+
+    A near-miss id — 25 characters, or an ``o`` where a ``0`` belongs — leaves
+    its object unbound (§4.3), and an unbound object takes every inbound link
+    with it, since §9.2 can only resolve to a node that has an id. "Invalid
+    id" alone sends the reader hunting; naming the reason does not.
+    """
+    if not isinstance(value, str):
+        return f"expected a string, got {type(value).__name__}"
+    lowered = value.lower()
+    if _ULID_RE.match(lowered):
+        return None
+    if len(lowered) != ULID_LENGTH:
+        return f"{len(lowered)} characters; a ULID is {ULID_LENGTH} (§4.1)"
+    bad = sorted({c for c in lowered if c not in _ULID_ALPHABET})
+    if bad:
+        return (
+            f"illegal character(s) {''.join(bad)!r}; Crockford base32 omits "
+            "i, l, o and u (§4.1)"
+        )
+    return "not a ULID (§4.1)"
 
 
 def _scalar(value: Any) -> str:
@@ -172,11 +200,16 @@ def parse_note(text: str, path: str = "") -> Note:
     node_id = None
     if b.get("id") is not None:
         candidate = _scalar(b["id"]).lower()
-        if is_ulid(candidate):
+        problem = ulid_problem(candidate)
+        if problem is None:
             node_id = candidate
         else:
             errors.append(
-                {"severity": "error", "code": "INVALID_ID", "detail": _scalar(b["id"])}
+                {
+                    "severity": "error",
+                    "code": "INVALID_ID",
+                    "detail": f"{_scalar(b['id'])}: {problem}",
+                }
             )
 
     # Title: frontmatter, then the first H1, then the filename stem (§5.2).

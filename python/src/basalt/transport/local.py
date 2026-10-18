@@ -133,12 +133,21 @@ class LocalTransport(Transport):
         assert stat is not None  # just written
         return stat
 
-    def delete(self, key: str) -> bool:
+    def delete(self, key: str) -> None:
+        """Remove one key, reporting nothing about whether it was there (§1.2).
+
+        A filesystem *can* answer cheaply — ``unlink`` raises
+        ``FileNotFoundError`` and the boolean is right there — and §1.2 names
+        that as exactly the trap. Returning it here would make this transport
+        disagree with the S3 one on the same call, so the information is
+        discarded deliberately rather than for want of access to it.
+        """
         try:
             self._resolve(key).unlink()
-        except FileNotFoundError:
-            return False
-        return True
+        except (FileNotFoundError, NotADirectoryError):
+            # Both mean there is no object at this key, which is a successful
+            # delete under §1.2's idempotence.
+            return
 
 
 __all__ = ["LocalTransport"]

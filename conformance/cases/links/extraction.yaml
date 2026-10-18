@@ -1,0 +1,54 @@
+# Link extraction, PROTOCOL §9.1. Content in, edge list out.
+level: L2
+spec: "9.1"
+cases:
+  - name: all-forms
+    path: "Notes/Source.md"
+    content: |
+      # Source
+      A plain [[Columns]] link, an aliased [[Columns|the columns]] one,
+      an anchored [[Columns#jointing]] and a block ref [[Columns#^abc123]].
+      An embed: ![[diagram.png]]
+      A markdown link [see this](Columns.md) and [out](https://example.com/x).
+      Tagged #geometry and #nested/tag here.
+    edges:
+      - {kind: wiki,     raw: "Columns", alias: null,            anchor: null,       line: 2}
+      - {kind: wiki,     raw: "Columns", alias: "the columns",   anchor: null,       line: 2}
+      - {kind: wiki,     raw: "Columns", alias: null,            anchor: "jointing", line: 3}
+      - {kind: wiki,     raw: "Columns", alias: null,            anchor: "^abc123",  line: 3}
+      - {kind: embed,    raw: "diagram.png", alias: null,        anchor: null,       line: 4}
+      - {kind: md,       raw: "Columns.md", alias: "see this",   anchor: null,       line: 5}
+      - {kind: external, raw: "https://example.com/x", alias: "out", anchor: null,   line: 5}
+    tags: ["geometry", "nested", "nested/tag"]
+
+  - name: code-fences-excluded
+    path: "Notes/Doc.md"
+    content: |
+      Real [[Target]] here.
+      ```
+      Not a link: [[FencedOut]]
+      ```
+      Inline `[[CodeSpan]]` is not a link either.
+      ~~~md
+      [[TildeFenced]]
+      ~~~
+      <!-- [[Commented]] -->
+    edges:
+      - {kind: wiki, raw: "Target", alias: null, anchor: null, line: 1}
+    note: §9.1 requires this; a spec document full of examples must not self-link.
+
+  - name: malformed-skipped-silently
+    path: "Notes/Bad.md"
+    content: |
+      Unterminated [[ here.
+      Empty [[]] and whitespace [[   ]].
+      Good [[Real]].
+    edges:
+      - {kind: wiki, raw: "Real", alias: null, anchor: null, line: 3}
+
+  - name: tag-edge-cases
+    path: "Notes/Tags.md"
+    content: |
+      Language C# is not a tag. Neither is #1 nor url#frag.
+      But #real and #deep/nested/tag are.
+    tags: ["real", "deep", "deep/nested", "deep/nested/tag"]

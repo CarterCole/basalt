@@ -1,0 +1,113 @@
+{
+  "basalt": 1,
+  "entries": [
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 45,
+      "from": "01jbq100000000000000000003",
+      "kind": "wiki",
+      "line": 11,
+      "raw": "Hexes",
+      "to": "01jbq100000000000000000002"
+    },
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 9,
+      "from": "01jbq100000000000000000002",
+      "kind": "wiki",
+      "line": 10,
+      "raw": "Start Here",
+      "to": "01jbq100000000000000000001"
+    },
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": "jointing",
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 34,
+      "from": "01jbq100000000000000000002",
+      "kind": "wiki",
+      "line": 10,
+      "raw": "Columns",
+      "to": "01jbq100000000000000000003"
+    },
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 18,
+      "from": "01jbq100000000000000000002",
+      "kind": "wiki",
+      "line": 11,
+      "raw": "Does Not Exist",
+      "to": null
+    },
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 22,
+      "from": "01jbq100000000000000000001",
+      "kind": "wiki",
+      "line": 9,
+      "raw": "Hexes",
+      "to": "01jbq100000000000000000002"
+    },
+    {
+      "alias": "basalt columns",
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 40,
+      "from": "01jbq100000000000000000001",
+      "kind": "wiki",
+      "line": 9,
+      "raw": "Columns",
+      "to": "01jbq100000000000000000003"
+    },
+    {
+      "alias": null,
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 17,
+      "from": "01jbq100000000000000000001",
+      "kind": "embed",
+      "line": 10,
+      "raw": "diagram.png",
+      "to": "01jbq100000000000000000004"
+    },
+    {
+      "alias": "the spec",
+      "ambiguous": false,
+      "anchor": null,
+      "anchor_resolved": true,
+      "candidates": [],
+      "col": 24,
+      "from": "01jbq100000000000000000001",
+      "kind": "external",
+      "line": 11,
+      "raw": "https://example.com/spec",
+      "to": null
+    }
+  ],
+  "generated": "1970-01-01T00:00:00Z",
+  "kind": "links",
+  "source_digest": "sha256:3aae36e38c2a4954634daefc2c9fec2960987ada999b38df5faf26579369b069",
+  "vault": "01JBQ7X8Z4N3VYK9M2T5HRWC6P"
+}

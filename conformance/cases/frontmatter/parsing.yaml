@@ -1,0 +1,102 @@
+# Frontmatter parsing and error recovery, PROTOCOL §5.2.
+level: L1
+spec: "5.2"
+cases:
+  - name: well-formed
+    content: |
+      ---
+      basalt:
+        id: 01jbq7x8z4n3vyk9m2t5hrwc6p
+      title: Hexagons all the way down
+      tags: [geometry, h3]
+      ---
+      # Body
+    expect:
+      id: "01jbq7x8z4n3vyk9m2t5hrwc6p"
+      title: "Hexagons all the way down"
+      tags: ["geometry", "h3"]
+      body_starts_line: 7
+
+  - name: no-frontmatter-title-from-h1
+    content: |
+      # From The Heading
+      Text.
+    expect: {id: null, title: "From The Heading", tags: []}
+
+  - name: no-frontmatter-no-h1-title-from-stem
+    path: "Notes/Filename Stem.md"
+    content: "Just text.\n"
+    expect: {id: null, title: "Filename Stem", tags: []}
+
+  - name: frontmatter-title-beats-h1
+    content: |
+      ---
+      title: Frontmatter Wins
+      ---
+      # Heading Loses
+    expect: {title: "Frontmatter Wins"}
+
+  - name: tags-as-comma-scalar
+    content: |
+      ---
+      tags: geometry, h3, notes
+      ---
+    expect: {tags: ["geometry", "h3", "notes"]}
+
+  - name: tags-merge-with-inline
+    content: |
+      ---
+      tags: [fromfm]
+      ---
+      Body with #inline tag.
+    expect: {tags: ["fromfm", "inline"]}
+
+  - name: malformed-yaml-recovers
+    content: |
+      ---
+      title: "unterminated
+      basalt: {id: [broken
+      ---
+      # Body Survives
+    expect:
+      id: null
+      title: "Body Survives"
+      tags: []
+      errors: [{severity: warning, code: FRONTMATTER_PARSE}]
+    note: §5.2 — one malformed file must never cost the vault its index.
+
+  - name: delimiter-must-be-first-line
+    content: |
+
+      ---
+      title: Not Frontmatter
+      ---
+    expect: {id: null, title: null, tags: []}
+    note: A leading blank line means there is no frontmatter block.
+
+  - name: bom-before-delimiter-rejected
+    content: "﻿---\ntitle: Nope\n---\n"
+    expect: {id: null, title: null, tags: []}
+
+  - name: empty-frontmatter-block
+    content: |
+      ---
+      ---
+      # Body
+    expect: {id: null, title: "Body", tags: []}
+
+  - name: user-keys-never-collide-with-protocol
+    content: |
+      ---
+      basalt:
+        id: 01jbq7x8z4n3vyk9m2t5hrwc6p
+        publish: false
+        aliases: [Alt Name]
+      id: "a user field called id"
+      publish: "a user field called publish"
+      ---
+    expect:
+      id: "01jbq7x8z4n3vyk9m2t5hrwc6p"
+      publish: false
+      aliases: ["Alt Name"]
+    note: §5.2 — protocol keys live under `basalt`, so top-level user keys are safe.

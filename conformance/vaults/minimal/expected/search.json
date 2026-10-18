@@ -1,0 +1,10 @@
+{
+  "basalt": 1,
+  "generated": "1970-01-01T00:00:00Z",
+  "kind": "search",
+  "source_digest": "sha256:3aae36e38c2a4954634daefc2c9fec2960987ada999b38df5faf26579369b069",
+  "stemmer": "none",
+  "stopwords": "basalt-en-v1",
+  "terms": {},
+  "vault": "01JBQ7X8Z4N3VYK9M2T5HRWC6P"
+}

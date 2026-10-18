@@ -1,0 +1,2 @@
+groups:
+  - {id: g:editors, display: Editors, members: [u:carter, u:editor]}

@@ -1,0 +1,29 @@
+# Basalt conformance corpus inventory.
+#
+# Every implementation ships a runner that loads these cases and asserts
+# against them (PROTOCOL §14.2). No implementation defines its own
+# expectations for behavior the spec covers.
+basalt: 1
+corpus: 1
+
+suites:
+  - {file: cases/keys/validation.yaml,        level: L0, spec: "1.1", cases: 15}
+  - {file: cases/paths/collisions.yaml,       level: L1, spec: "2.2", cases: 4}
+  - {file: cases/paths/folders.yaml,          level: L1, spec: "2.1", cases: 3}
+  - {file: cases/frontmatter/parsing.yaml,    level: L1, spec: "5.2", cases: 11}
+  - {file: cases/links/extraction.yaml,       level: L2, spec: "9.1", cases: 4}
+  - {file: cases/links/resolution.yaml,       level: L2, spec: "9.2", cases: 13}
+  - {file: cases/acl/evaluation.yaml,         level: L3, spec: "8.4", cases: 24}
+
+vaults:
+  - {dir: vaults/minimal, level: L2, note: "byte-exact index reproduction (§13)"}
+
+# A runner reports per level. An implementation claiming level N must pass
+# every suite at level N and below.
+levels:
+  L0: Transport
+  L1: Content
+  L2: Index
+  L3: Security
+  L4: Gatekeeper
+  L5: History

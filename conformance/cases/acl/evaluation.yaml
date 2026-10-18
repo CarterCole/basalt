@@ -1,0 +1,315 @@
+# ACL evaluation, PROTOCOL §8.4. Each case names the ACE that decided each
+# right (§14.2) — a boolean-only assertion cannot catch band-ordering bugs.
+# ACEs carry a fixture-only `id` so cases can reference the decider.
+level: L3
+spec: "8.4"
+
+# Cases in this file isolate DACL evaluation (§8.4): band ordering, flags,
+# principals, roles. They therefore run with the ancestor traverse chain
+# bypassed, because a case that declares only a leaf descriptor grants
+# `traverse` nowhere and would be denied by §8.5 before §8.4 was ever
+# reached — testing the wrong thing. The traverse chain has its own two
+# cases below, which set `bypass_traverse` explicitly.
+#
+# A case's `manifest` is deep-merged over these defaults.
+defaults:
+  manifest:
+    security:
+      bypass_traverse: true
+      deny_unresolved: true
+    publish:
+      audience: gated
+
+principals:
+  users:
+    - {id: "u:carter", status: active}
+    - {id: "u:editor", status: active}
+    - {id: "u:reader", status: active}
+    - {id: "u:gone",   status: suspended}
+  groups:
+    - {id: "g:editors", members: ["u:editor"]}
+    - {id: "g:staff",   members: ["g:editors", "u:reader"]}   # nested
+    - {id: "g:loop_a",  members: ["g:loop_b"]}                 # cycle
+    - {id: "g:loop_b",  members: ["g:loop_a"]}
+  roles:
+    reader: [read, list, traverse]
+    editor: [read, list, traverse, comment, write, create_child, delete_child]
+
+cases:
+  # ---- the default ----
+  - name: deny-by-default
+    descriptors:
+      "/": {dacl: []}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: deny, by: default}}
+    note: §8.4 step 5 — a right no ACE mentions is denied.
+
+  # ---- the critical NTFS band ordering ----
+  - name: explicit-allow-beats-inherited-deny
+    descriptors:
+      "/":
+        dacl:
+          - {id: A1, type: deny, subject: everyone, rights: [read], flags: [oi, ci]}
+      "Notes/Public.md":
+        dacl:
+          - {id: A2, type: allow, subject: "u:reader", rights: [read], flags: []}
+    request: {principal: "u:reader", path: "Notes/Public.md", rights: [read]}
+    expect: {read: {decision: allow, by: A2}}
+    note: >
+      THE case that separates conforming from naive implementations. An
+      implementation that globally prioritizes deny over allow returns deny
+      here and is non-conforming (§8.4). Explicit band precedes inherited band.
+
+  - name: explicit-deny-beats-explicit-allow
+    descriptors:
+      "Notes/Locked.md":
+        dacl:
+          - {id: B1, type: deny,  subject: "u:reader", rights: [read], flags: []}
+          - {id: B2, type: allow, subject: "u:reader", rights: [read], flags: []}
+    request: {principal: "u:reader", path: "Notes/Locked.md", rights: [read]}
+    expect: {read: {decision: deny, by: B1}}
+    note: Within the explicit band, deny is ordered first.
+
+  - name: inherited-deny-beats-inherited-allow
+    descriptors:
+      "/":
+        dacl:
+          - {id: C1, type: allow, subject: everyone,  rights: [read], flags: [oi]}
+          - {id: C2, type: deny,  subject: "u:reader", rights: [read], flags: [oi]}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: deny, by: C2}}
+
+  - name: nearer-ancestor-wins
+    descriptors:
+      "/":
+        dacl:
+          - {id: D1, type: allow, subject: everyone, rights: [read], flags: [oi, ci]}
+      "Notes/":
+        dacl:
+          - {id: D2, type: deny, subject: everyone, rights: [read], flags: [oi]}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: deny, by: D2}}
+    note: §8.4 step 4 — inherited entries sort by ancestor distance.
+
+  # ---- per-right independence ----
+  - name: rights-resolve-independently
+    descriptors:
+      "Notes/Mixed.md":
+        dacl:
+          - {id: E1, type: allow, subject: "u:editor", rights: [read, list], flags: []}
+          - {id: E2, type: deny,  subject: "u:editor", rights: [write],      flags: []}
+    request: {principal: "u:editor", path: "Notes/Mixed.md", rights: [read, write]}
+    expect:
+      read:  {decision: allow, by: E1}
+      write: {decision: deny,  by: E2}
+    overall: deny
+    note: §8.4 step 6 — overall fails, but each right reports its own decider.
+
+  # ---- inheritance flags ----
+  - name: oi-applies-to-files-not-folders
+    descriptors:
+      "/":
+        dacl:
+          - {id: F1, type: allow, subject: everyone, rights: [read, list], flags: [oi]}
+    requests:
+      - {principal: "u:reader", path: "Notes/File.md", rights: [read], expect: {read: {decision: allow, by: F1}}}
+      - {principal: "u:reader", path: "Notes/",        rights: [list], expect: {list: {decision: deny,  by: default}}}
+
+  - name: ci-applies-to-folders-not-files
+    descriptors:
+      "/":
+        dacl:
+          - {id: G1, type: allow, subject: everyone, rights: [read, list], flags: [ci]}
+    requests:
+      - {principal: "u:reader", path: "Notes/",        rights: [list], expect: {list: {decision: allow, by: G1}}}
+      - {principal: "u:reader", path: "Notes/File.md", rights: [read], expect: {read: {decision: deny,  by: default}}}
+
+  - name: np-stops-after-direct-children
+    descriptors:
+      "/":
+        dacl:
+          - {id: H1, type: allow, subject: everyone, rights: [read], flags: [oi, np]}
+    requests:
+      - {principal: "u:reader", path: "Top.md",             rights: [read], expect: {read: {decision: allow, by: H1}}}
+      - {principal: "u:reader", path: "Notes/Deeper.md",    rights: [read], expect: {read: {decision: deny,  by: default}}}
+
+  - name: io-does-not-apply-to-carrier
+    descriptors:
+      "Notes/":
+        dacl:
+          - {id: I1, type: allow, subject: everyone, rights: [list], flags: [ci, io]}
+    requests:
+      - {principal: "u:reader", path: "Notes/",       rights: [list], expect: {list: {decision: deny,  by: default}}}
+      - {principal: "u:reader", path: "Notes/Sub/",   rights: [list], expect: {list: {decision: allow, by: I1}}}
+
+  - name: protected-blocks-ancestors
+    descriptors:
+      "/":
+        dacl:
+          - {id: J1, type: allow, subject: everyone, rights: [read, traverse], flags: [oi, ci]}
+      "Secret/":
+        protected: true
+        dacl:
+          - {id: J2, type: allow, subject: "u:carter", rights: [read, traverse, list], flags: [oi, ci]}
+    requests:
+      - {principal: "u:reader", path: "Secret/In.md", rights: [read], expect: {read: {decision: deny,  by: default}}}
+      - {principal: "u:carter", path: "Secret/In.md", rights: [read], expect: {read: {decision: allow, by: J2}}}
+    note: §8.3 — the root allow is not considered at or below a protected folder.
+
+  # ---- traverse ----
+  - name: traverse-chain-required
+    manifest: {security: {bypass_traverse: false}}
+    descriptors:
+      "/":
+        dacl:
+          - {id: K1, type: allow, subject: everyone, rights: [traverse], flags: [ci]}
+      "A/":
+        dacl:
+          - {id: K2, type: deny, subject: everyone, rights: [traverse], flags: []}
+      "A/B/Leaf.md":
+        dacl:
+          - {id: K3, type: allow, subject: "u:reader", rights: [read], flags: []}
+    request: {principal: "u:reader", path: "A/B/Leaf.md", rights: [read]}
+    expect: {read: {decision: deny, by: K2, failed_at: "A/"}}
+    note: §8.5 — leaf read is allowed, but the ancestor traverse check fails.
+
+  - name: bypass-traverse-skips-ancestors
+    manifest: {security: {bypass_traverse: true}}
+    descriptors:
+      "A/":
+        dacl:
+          - {id: L1, type: deny, subject: everyone, rights: [traverse], flags: []}
+      "A/B/Leaf.md":
+        dacl:
+          - {id: L2, type: allow, subject: "u:reader", rights: [read], flags: []}
+    request: {principal: "u:reader", path: "A/B/Leaf.md", rights: [read]}
+    expect: {read: {decision: allow, by: L2}}
+
+  # ---- principals ----
+  - name: nested-group-transitivity
+    descriptors:
+      "Notes/Staff.md":
+        dacl:
+          - {id: M1, type: allow, subject: "g:staff", rights: [read], flags: []}
+    request: {principal: "u:editor", path: "Notes/Staff.md", rights: [read]}
+    expect: {read: {decision: allow, by: M1}}
+    note: u:editor ∈ g:editors ∈ g:staff (§7.2).
+
+  - name: membership-cycle-terminates
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: N1, type: allow, subject: "g:loop_a", rights: [read], flags: []}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: deny, by: default}}
+    integrity: [{severity: error, code: GROUP_CYCLE, subject: "g:loop_a"}]
+    note: §7.2 — must terminate and still decide, not hang.
+
+  - name: suspended-user-keeps-denies-loses-allows
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: O1, type: allow, subject: "g:staff", rights: [read], flags: []}
+          - {id: O2, type: allow, subject: "u:gone",  rights: [read], flags: []}
+      "Notes/Other.md":
+        dacl:
+          - {id: O3, type: deny,  subject: "u:gone",  rights: [read], flags: []}
+          - {id: O4, type: allow, subject: everyone,  rights: [read], flags: []}
+    requests:
+      - {principal: "u:gone", path: "Notes/Any.md",   rights: [read], expect: {read: {decision: deny, by: default}}}
+      - {principal: "u:gone", path: "Notes/Other.md", rights: [read], expect: {read: {decision: deny, by: O3}}}
+    note: §7.1 — suspension must never widen access.
+
+  - name: owner-well-known-principal
+    descriptors:
+      "Notes/Mine.md":
+        owner: "u:carter"
+        dacl:
+          - {id: P1, type: allow, subject: owner, rights: [read, write], flags: []}
+    requests:
+      - {principal: "u:carter", path: "Notes/Mine.md", rights: [read], expect: {read: {decision: allow, by: P1}}}
+      - {principal: "u:reader", path: "Notes/Mine.md", rights: [read], expect: {read: {decision: deny,  by: default}}}
+
+  - name: authenticated-excludes-anonymous
+    # Needs `public`: under `gated` the audience ceiling (§12.2) denies
+    # anonymous before the DACL is consulted, so the ceiling rather than the
+    # `authenticated` subject would be doing the work.
+    manifest: {publish: {audience: public}}
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: Q1, type: allow, subject: authenticated, rights: [read, publish], flags: []}
+    requests:
+      - {principal: "u:reader",  path: "Notes/Any.md", rights: [read], expect: {read: {decision: allow, by: Q1}}}
+      - {principal: "anonymous", path: "Notes/Any.md", rights: [read], expect: {read: {decision: deny,  by: default}}}
+
+  - name: unresolved-subject-denies-by-default
+    manifest: {security: {deny_unresolved: true}}
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: R1, type: allow, subject: "g:typo", rights: [read], flags: []}
+          - {id: R2, type: allow, subject: everyone, rights: [read], flags: []}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: deny, by: R1}}
+    integrity: [{severity: error, code: UNRESOLVED_SUBJECT, subject: "g:typo"}]
+    note: §8.4 — a typo must not silently grant; the bad ACE denies its rights.
+
+  - name: unresolved-subject-dropped-when-configured
+    manifest: {security: {deny_unresolved: false}}
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: S1, type: allow, subject: "g:typo", rights: [read], flags: []}
+          - {id: S2, type: allow, subject: everyone, rights: [read], flags: []}
+    request: {principal: "u:reader", path: "Notes/Any.md", rights: [read]}
+    expect: {read: {decision: allow, by: S2}}
+
+  # ---- roles and publish ----
+  - name: role-expands-at-evaluation
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: T1, type: allow, subject: "g:editors", rights: [editor], flags: []}
+    request: {principal: "u:editor", path: "Notes/Any.md", rights: [read, write, comment]}
+    expect:
+      read:    {decision: allow, by: T1}
+      write:   {decision: allow, by: T1}
+      comment: {decision: allow, by: T1}
+
+  - name: anonymous-needs-publish-as-well-as-read
+    manifest: {publish: {audience: public}}
+    descriptors:
+      "Notes/ReadOnly.md":
+        dacl:
+          - {id: U1, type: allow, subject: everyone, rights: [read], flags: []}
+      "Notes/Published.md":
+        dacl:
+          - {id: U2, type: allow, subject: everyone, rights: [read, publish], flags: []}
+    requests:
+      - {principal: "anonymous", path: "Notes/ReadOnly.md",  rights: [read], expect: {read: {decision: deny,  by: missing_publish}}}
+      - {principal: "anonymous", path: "Notes/Published.md", rights: [read], expect: {read: {decision: allow, by: U2}}}
+      - {principal: "u:reader",  path: "Notes/ReadOnly.md",  rights: [read], expect: {read: {decision: allow, by: U1}}}
+    note: §8.1 — "shared with all accounts" and "on the public internet" differ.
+
+  - name: gated-audience-ceiling-denies-anonymous
+    manifest: {publish: {audience: gated}}
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: V1, type: allow, subject: everyone, rights: [read, publish], flags: []}
+    requests:
+      - {principal: "anonymous", path: "Notes/Any.md", rights: [read], expect: {read: {decision: deny,  by: audience_ceiling}}}
+      - {principal: "u:reader",  path: "Notes/Any.md", rights: [read], expect: {read: {decision: allow, by: V1}}}
+    note: §12.2 — the ceiling applies before §8.4 and can only narrow.
+
+  - name: private-audience-ignores-everyone-grants
+    manifest: {publish: {audience: private}}
+    descriptors:
+      "Notes/Any.md":
+        dacl:
+          - {id: W1, type: allow, subject: everyone,  rights: [read], flags: []}
+          - {id: W2, type: allow, subject: "u:carter", rights: [read], flags: []}
+    requests:
+      - {principal: "u:reader", path: "Notes/Any.md", rights: [read], expect: {read: {decision: deny,  by: audience_ceiling}}}
+      - {principal: "u:carter", path: "Notes/Any.md", rights: [read], expect: {read: {decision: allow, by: W2}}}

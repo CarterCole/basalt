@@ -1,0 +1,5 @@
+roles:
+  reader: [read, list, traverse]
+  commenter: [read, list, traverse, comment]
+  editor: [read, list, traverse, comment, write, create_child, delete_child]
+  owner: [full_control]

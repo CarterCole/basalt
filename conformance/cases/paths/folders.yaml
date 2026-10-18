@@ -1,0 +1,18 @@
+# Virtual folders are implied by the keys beneath them, PROTOCOL §2.1.
+level: L1
+spec: "2.1"
+cases:
+  - name: implied-folders
+    keys:
+      - "content/Notes/Ideas/Hexes.md"
+      - "content/Notes/Start.md"
+      - "content/Assets/diagram.png"
+    folders: ["Assets/", "Notes/", "Notes/Ideas/"]   # sorted per §13.3
+  - name: no-empty-folders
+    keys: []
+    folders: []
+    note: Deleting the last object removes the folder; no marker objects exist.
+  - name: folder-record-does-not-create-folder
+    keys: ["meta/folders/Ghost/folder.yaml"]
+    folders: []
+    note: A record under meta/ implies nothing about content/.

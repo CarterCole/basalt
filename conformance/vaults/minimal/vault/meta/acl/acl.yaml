@@ -1,0 +1,11 @@
+# Root security descriptor (§8.6).
+#
+# This grants navigation only — `traverse` and `list`, with `ci` so folder
+# descendants inherit them — and no `read` anywhere. Without a root grant of
+# `traverse`, §8.5 denies every request in the vault no matter what the leaf
+# ACLs say, which is the accidental lockout §8.5 warns about.
+folder:
+  owner: u:carter
+  protected: false
+  dacl:
+    - {type: allow, subject: everyone, rights: [traverse, list], flags: [ci]}

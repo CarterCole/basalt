@@ -1,0 +1,18 @@
+folder:
+  owner: u:carter
+  protected: false
+  dacl:
+    - {type: allow, subject: g:editors, rights: [editor], flags: [ci, oi]}
+    - {type: allow, subject: everyone, rights: [read, list, traverse], flags: [oi]}
+entries:
+  # A private note. The deny names g:staff, NOT everyone: `everyone` matches
+  # every request including the owner's, and explicit deny precedes explicit
+  # allow (§8.4), so denying everyone here would lock out u:carter too despite
+  # the full_control grant below. A DACL cannot say "everyone except Carter" —
+  # the idiom is to deny a group the owner is not a member of. See §15,
+  # "Deny is not revocation".
+  Columns.md:
+    owner: u:carter
+    dacl:
+      - {type: deny, subject: g:staff, rights: [read], flags: []}
+      - {type: allow, subject: u:carter, rights: [full_control], flags: []}

@@ -49,11 +49,29 @@ def test_put_replaces_atomically(transport: Transport) -> None:
     assert stat is not None and stat.size == 4
 
 
-def test_delete_is_idempotent(transport: Transport) -> None:
+def test_delete_is_idempotent_and_reports_nothing(transport: Transport) -> None:
+    """§1.2 — ``delete`` tells you nothing about whether the key existed.
+
+    Returning prior existence would make the filesystem transport disagree
+    with the S3 one on the same call: ``DeleteObject`` answers 204 whether or
+    not the key was there, and MinIO and R2 match it. A filesystem *can*
+    answer cheaply, which is the trap §1.2 names, so every transport here
+    discards the information.
+    """
     transport.put("content/a.md", b"x")
-    assert transport.delete("content/a.md") is True
-    assert transport.delete("content/a.md") is False
+    assert transport.delete("content/a.md") is None
+    assert transport.delete("content/a.md") is None  # idempotent
+    assert transport.delete("content/never-existed.md") is None
     assert transport.get("content/a.md") is None
+
+
+def test_stat_is_how_you_learn_whether_a_key_exists(transport: Transport) -> None:
+    """§1.2 — "To learn whether a key exists, call ``stat``"."""
+    assert transport.stat("content/a.md") is None
+    transport.put("content/a.md", b"x")
+    assert transport.stat("content/a.md") is not None
+    transport.delete("content/a.md")
+    assert transport.stat("content/a.md") is None
 
 
 def test_list_enumerates_under_a_prefix(transport: Transport) -> None:

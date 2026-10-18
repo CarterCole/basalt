@@ -1,0 +1,18 @@
+[package]
+name = "basalt-cli"
+description = "The basalt CLI, including the self-check PROTOCOL §14.3 requires"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "basalt"
+path = "src/main.rs"
+
+[features]
+default = []
+s3 = ["basalt/s3"]
+
+[dependencies]
+basalt = { path = "../basalt" }

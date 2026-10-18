@@ -89,8 +89,21 @@ class Transport(abc.ABC):
         """
 
     @abc.abstractmethod
-    def delete(self, key: str) -> bool:
-        """Remove one key. Idempotent; ``False`` when it was already absent."""
+    def delete(self, key: str) -> None:
+        """Remove one key. Idempotent, and it tells you nothing (§1.2).
+
+        §1.2 is explicit: ``delete`` returns no information about whether the
+        key existed, implementations MUST NOT report prior existence from it,
+        and callers MUST NOT branch on anything it returns. S3's
+        ``DeleteObject`` answers 204 whether or not the key was there and
+        MinIO and R2 match it, so a boolean would mean one thing on a
+        filesystem and another in a bucket — the trap §1.2 names, since an
+        implementation developed only against a filesystem exposes a boolean
+        that silently becomes wrong the day the vault moves to a bucket.
+
+        To learn whether a key exists, call :meth:`stat` and accept that the
+        answer is already stale.
+        """
 
     @abc.abstractmethod
     def list(

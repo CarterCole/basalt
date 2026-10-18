@@ -56,9 +56,10 @@ class MemoryTransport(Transport):
         assert stat is not None
         return stat
 
-    def delete(self, key: str) -> bool:
+    def delete(self, key: str) -> None:
+        """Remove one key, reporting nothing about whether it was there (§1.2)."""
         self.mtimes.pop(key, None)
-        return self.objects.pop(key, None) is not None
+        self.objects.pop(key, None)
 
     def list(
         self,

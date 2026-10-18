@@ -1,0 +1,10 @@
+# A public vault: `read` and `publish` to everyone, inherited by both folders
+# (ci) and notes (oi). `publish` is what §8.1 requires in addition to `read`
+# before the anonymous principal may see a node, so granting it here is the
+# deliberate act of making this vault public.
+folder:
+  owner: u:carter
+  protected: false
+  dacl:
+    - {type: allow, subject: everyone, rights: [read, list, traverse, publish], flags: [oi, ci]}
+    - {type: allow, subject: g:editors, rights: [editor], flags: [oi, ci]}
