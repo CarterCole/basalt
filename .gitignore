@@ -8,3 +8,7 @@ __pycache__/
 
 # Static export output (regenerate with `basalt export`)
 dist/
+
+# Corpus copies made by scripts/sync-corpus.mjs immediately before a release.
+# The corpus itself lives once, at conformance/; these are never committed.
+packaging/*/assets/

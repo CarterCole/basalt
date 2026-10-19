@@ -1,0 +1,31 @@
+[project]
+name = "basalt-conformance"
+version = "1.0.0"
+description = "The Basalt Protocol conformance corpus: language-neutral fixtures and vaults with expected index output"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Carter Cole" }]
+keywords = ["basalt", "conformance", "test-fixtures", "protocol"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/CarterCole/basalt"
+Repository = "https://github.com/CarterCole/basalt"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/basalt_conformance"]
+
+# `assets/` is populated by scripts/sync-corpus.mjs immediately before a
+# release and is gitignored, so the corpus is never duplicated in git.
+[tool.hatch.build.targets.wheel.force-include]
+"assets" = "basalt_conformance/assets"

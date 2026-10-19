@@ -1,7 +1,21 @@
 # Releasing Basalt to crates.io, PyPI and npm
 
-Status: **plan, nothing published yet.** This document exists to be argued
-with before any of it is executed.
+Status: **prepared, nothing published.** Renames, metadata, the corpus
+packages and the dependency wiring are done and dry-run. The irreversible
+step — uploading — has not been taken, and needs credentials this machine
+does not have (npm is logged out; there is no PyPI configuration).
+
+Verified rather than assumed:
+
+| Check | Result |
+|---|---|
+| `cargo package --list` on the corpus crate | **0 → 46** fixture files |
+| `npm pack --dry-run` on the corpus package | 46 fixture files, 24.7 kB |
+| Wheel built from `packaging/pypi` | 46 fixture files |
+| `cargo publish --dry-run` — corpus | passes |
+| `cargo publish --dry-run` — `basalt-vault` | **fails, by design**: `no matching package named basalt-conformance found`. Cargo will not publish a crate whose dev-dependency cannot be resolved from the registry, which enforces the release order in §6 rather than leaving it to discipline. |
+| Rust / TypeScript / Python suites | 77 / 146 / 216 passing |
+| Rust reads the corpus via the package | yes — `basalt_conformance::corpus_dir()` |
 
 The whole shape of this release is set by one structural fact:
 
@@ -30,7 +44,7 @@ below follows from fixing that.
 The GitHub repo can stay `CarterCole/basalt` — registry collisions do not
 affect it.
 
-## 2. Naming
+## 2. Naming — decided
 
 `basalt-vault` is the **only candidate free on all three registries**, and
 `basalt-conformance` is likewise free on all three. Taking one name everywhere
@@ -51,6 +65,11 @@ avoids depending on an org that does not exist.
 **Claim all five names on all three registries before anything else.** They are
 free today and cost nothing; a squatter on `basalt-conformance` after the spec
 gets attention would be genuinely painful.
+
+The manifests now declare these names, at version `1.0.0`. The Rust package is
+`basalt-vault` while the *library* is still `basalt` (`[lib] name = "basalt"`),
+so every `use basalt::` path in the codebase is untouched by a rename forced
+on us by a registry collision.
 
 ## 3. The corpus package — the crux
 

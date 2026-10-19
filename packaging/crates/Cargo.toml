@@ -1,0 +1,17 @@
+[package]
+name = "basalt-conformance"
+version = "1.0.0"
+description = "The Basalt Protocol conformance corpus: language-neutral fixtures and vaults with expected index output"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+repository = "https://github.com/CarterCole/basalt"
+homepage = "https://github.com/CarterCole/basalt"
+keywords = ["basalt", "conformance", "test-fixtures", "protocol"]
+categories = ["development-tools::testing"]
+readme = "README.md"
+
+# `assets/` is populated by scripts/sync-corpus.mjs immediately before a
+# release and is gitignored, so the corpus is never duplicated in git. It is
+# listed here so `cargo package` picks it up when it is present.
+include = ["src/**", "assets/**", "README.md", "Cargo.toml"]

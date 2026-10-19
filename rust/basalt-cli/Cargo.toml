@@ -1,10 +1,13 @@
 [package]
-name = "basalt-cli"
+name = "basalt-vault-cli"
 description = "The basalt CLI, including the self-check PROTOCOL §14.3 requires"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../README.md"
 
 [[bin]]
 name = "basalt"
@@ -12,7 +15,9 @@ path = "src/main.rs"
 
 [features]
 default = []
-s3 = ["basalt/s3"]
+s3 = ["basalt-vault/s3"]
 
 [dependencies]
-basalt = { path = "../basalt" }
+# `version` is what a published crate pins; `path` is what the
+# workspace uses. Cargo strips the path on publish.
+basalt-vault = { path = "../basalt", version = "1.0.0" }

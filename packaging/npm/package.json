@@ -1,0 +1,15 @@
+{
+  "name": "basalt-conformance",
+  "version": "1.0.0",
+  "description": "The Basalt Protocol conformance corpus: language-neutral fixtures and vaults with expected index output",
+  "keywords": ["basalt", "conformance", "test-fixtures", "protocol"],
+  "homepage": "https://github.com/CarterCole/basalt#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/CarterCole/basalt.git", "directory": "packaging/npm" },
+  "license": "MIT",
+  "author": "Carter Cole",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": { ".": "./index.mjs" },
+  "files": ["index.mjs", "assets/", "README.md"],
+  "engines": { "node": ">=20" }
+}

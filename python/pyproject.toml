@@ -1,9 +1,29 @@
 [project]
-name = "basalt-protocol"
-version = "0.1.0"
+name = "basalt-vault"
+version = "1.0.0"
 description = "Python implementation of the Basalt Protocol v1 — a portable knowledge vault in any object store"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Carter Cole" }]
+keywords = ["basalt", "knowledge-base", "markdown", "wikilink", "s3", "acl", "vault"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: System :: Archiving",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/CarterCole/basalt"
+Repository = "https://github.com/CarterCole/basalt"
+Issues = "https://github.com/CarterCole/basalt/issues"
+Specification = "https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md"
 dependencies = [
     "ruamel.yaml>=0.18",
     "regex>=2024.5.15",

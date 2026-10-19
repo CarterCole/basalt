@@ -1,10 +1,22 @@
 [package]
-name = "basalt"
+name = "basalt-vault"
 description = "Basalt Protocol v1 — portable knowledge vaults over any key-value store"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../README.md"
+
+# The package is `basalt-vault` because `basalt` is taken on crates.io, but
+# the library is still `basalt`: the crate name is what `use` paths say, and
+# renaming that would churn every file for a registry collision.
+[lib]
+name = "basalt"
+path = "src/lib.rs"
 
 [features]
 default = []
@@ -26,3 +38,11 @@ tokio = { version = "1.49", optional = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 serde_yaml_ng.workspace = true
+
+# The conformance corpus (PROTOCOL §14.2).
+#
+# `path` is what the workspace uses, so a fixture fix breaks these tests the
+# same minute it breaks the TypeScript ones. `version` is what a published
+# crate pins; Cargo strips the path on publish. Monorepo speed during
+# development, an explicit reviewable version for everyone else.
+basalt-conformance = { path = "../../packaging/crates", version = "1.0" }

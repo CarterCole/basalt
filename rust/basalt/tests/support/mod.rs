@@ -7,14 +7,20 @@
 //! the committed corpus.
 
 use serde_yaml_ng::Value as Yaml;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-/// The corpus root, found relative to this crate rather than to the cwd.
+/// The corpus root, from the `basalt-conformance` package rather than a path
+/// of our own.
+///
+/// In the workspace that package resolves to the repository's `conformance/`
+/// directory, so this still reads the live corpus. Published, it resolves to
+/// the fixtures shipped inside the crate — which is the whole point: the
+/// corpus sits outside every package directory, so a published crate reading
+/// `../../conformance` would find nothing there.
 pub fn conformance_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../conformance")
+    basalt_conformance::corpus_dir()
         .canonicalize()
-        .expect("conformance/ is a sibling of rust/")
+        .expect("the basalt-conformance package resolves to a corpus directory")
 }
 
 pub fn load(rel: &str) -> Yaml {
