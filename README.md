@@ -34,18 +34,24 @@ bucket, because no S3-like store can express an inherited deny.
 
 ## Three deliverables
 
-- **[The protocol](protocol/PROTOCOL.md)** — the normative spec. Sixteen
+- **[The protocol](protocol/PROTOCOL.md)** — the normative spec. Seventeen
   sections covering the transport contract, virtual folders, dual addressing,
   the security model, link resolution, the index formats, canonical
-  serialization and the conformance levels.
+  serialization and the conformance levels, plus
+  **[the interoperability annex](protocol/INTEROP.md)** and
+  **[the gRPC schema](protocol/basalt.proto)** for the protocols a gatekeeper
+  speaks beyond its own.
 - **[The conformance corpus](conformance/)** — language-neutral YAML fixtures
   plus whole vaults with expected index output. Every implementation ships a
   runner that loads these; none defines its own expectations for behavior the
   spec covers. `vaults/minimal` is `gated` and exercises the permission
   ceiling; `vaults/demo` is `public` and is what the Pages workflow ships.
 - **The implementations** — `ts/` is the reference: the protocol core, the
-  gatekeeper, a server-rendered publish site and a static exporter (L0-L4).
-  `rust/` and `python/` are held to the same corpus.
+  gatekeeper, every interop surface, a server-rendered publish site and a
+  static exporter (L0-L4, all profiles). `rust/` is held to the same corpus
+  and serves two of the surfaces itself (L0-L4, `P-REST`, `P-MCP`,
+  `P-INTEROP`), which is what makes the equivalence claim cross-language
+  rather than internal. `python/` is L0-L4 with no profiles yet.
 
 ## Run it
 
@@ -65,6 +71,85 @@ Serve it:
 ```bash
 node ts/bin/basalt.mjs serve --vault conformance/vaults/minimal/vault --port 4380
 ```
+
+That one listener speaks eight protocols over the same vault. Ask it what it
+speaks:
+
+```bash
+curl -s localhost:4380/.well-known/basalt | jq .surfaces
+```
+
+## Eight ways in, one set of permissions
+
+A vault is a format, so the question is not "what is our API" but "what can
+already read this". Each surface is a translation layer with no behaviour of
+its own — [the annex](protocol/INTEROP.md) specifies them, and one test suite
+asks all of them the same questions and compares the answers.
+
+| Surface | Endpoint | What already talks it |
+|---|---|---|
+| **REST** + OpenAPI 3.1 | `/api/v1`, `/api/v1/openapi.json` | anything HTTP; generated clients |
+| **GraphQL** | `/graphql`, SDL at `/graphql/schema.graphql` | web apps, Relay/Apollo, codegen |
+| **JSON-RPC 2.0** | `/rpc` | method-call clients, no handshake |
+| **MCP** | `/mcp`, or `basalt mcp` over stdio | Claude, editors, agent runtimes |
+| **gRPC / Connect** | `/basalt.v1.BasaltRead/*` + [`basalt.proto`](protocol/basalt.proto) | buf/connect clients, any language |
+| **WebDAV** (read-only) | `/dav/` | Finder, Explorer, GNOME Files, Cyberduck, `rclone`, `davfs2` |
+| **Atom / RSS / sitemap / OpenSearch** | `/feed.atom`, `/feed.xml`, `/sitemap.xml`, `/opensearch.xml` | NetNewsWire, Thunderbird, crawlers, browser search bars |
+| **JSON-LD / Turtle** | `/graph.jsonld`, `/graph.ttl` | triple stores, SPARQL engines, reasoners |
+
+The WebDAV mount is the one that surprises people: mount it and Obsidian, VS
+Code, `rg` and Quick Look all work on exactly the subset that principal may
+read, while the gatekeeper keeps the only credentials to the bucket. No other
+mainstream protocol hands a reader a *filtered filesystem*.
+
+Print the machine-readable descriptions without starting a server:
+
+```bash
+node ts/bin/basalt.mjs schema openapi --vault conformance/vaults/demo/vault
+```
+
+```bash
+node ts/bin/basalt.mjs schema graphql
+```
+
+Point an MCP client at a vault:
+
+```bash
+node ts/bin/basalt.mjs mcp --vault conformance/vaults/demo/vault --principal u:carter
+```
+
+Mount it read-only (macOS: Finder → Go → Connect to Server):
+
+```bash
+rclone mount :webdav,url=http://localhost:4380/dav: /tmp/vault --read-only
+```
+
+Serve a subset with `--surfaces rest,mcp`; a surface that is off is absent
+from the discovery document and 404s, so "off" and "broken" stay
+distinguishable.
+
+Two implementations, not one, answer some of these. `rust/` serves REST with
+its own generated OpenAPI document and MCP over both transports, held to the
+same corpus and the same equivalence questions:
+
+```bash
+cd rust && cargo run -p basalt-cli -- serve --vault ../conformance/vaults/demo/vault
+```
+
+```bash
+cd rust && cargo run -p basalt-cli -- mcp --vault ../conformance/vaults/demo/vault --principal u:carter
+```
+
+**Stated honestly.** Every surface is read-only: §12 defines a read surface,
+and a write path needs the §11 history semantics first. Binary gRPC and
+gRPC-Web need HTTP/2 or a Connect-aware proxy — this process serves the JSON
+codec, and the `.proto` is there so clients can be generated. The GraphQL
+executor is hand-written and covers queries, variables, aliases, fragments,
+`@skip`/`@include` and introspection, not interfaces, unions or
+subscriptions, none of which this schema uses; the SDL is the contract, so
+another implementation can serve it with a full library. There are no
+subscriptions or webhooks anywhere, because a read-only gatekeeper over a
+store with no change feed has nothing to push.
 
 Against an object store, the only change is the transport:
 
@@ -182,6 +267,17 @@ Two things the export deliberately does **not** promise:
 
 L0–L2 make a vault readable and indexable, which is all a static site
 generator needs. The reference implementation covers L0–L4.
+
+Beyond L4, the interop surfaces are declared as **profiles** — `P-REST`,
+`P-GRAPHQL`, `P-JSONRPC`, `P-MCP`, `P-GRPC`, `P-WEBDAV`, `P-FEEDS`, `P-RDF`,
+and `P-INTEROP` for holding two or more of them equivalent. Profiles are
+orthogonal to levels because they do not stack: speaking GraphQL implies
+nothing about speaking WebDAV. A vault declares what it serves in
+`publish.interop` — present, it is a ceiling a gatekeeper may not exceed;
+absent, the vault claims nothing and the operator decides — and
+[`conformance/cases/interop/`](conformance/cases/interop/) holds the
+requirements and the equivalence questions. `ts/` serves all eight profiles,
+`rust/` serves `P-REST`, `P-MCP` and `P-INTEROP`, `python/` none yet.
 
 ## Two things worth knowing before you trust it
 

@@ -80,7 +80,9 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  (JSON), read-only WebDAV, Atom/RSS/sitemap/OpenSearch and
                  RDF. --principal forces an identity for local testing;
                  without it every request is anonymous. --api-only omits the
-                 HTML site. --surfaces picks a subset of
+                 HTML site. Without --surfaces the vault's own
+                 publish.interop decides; --surfaces overrides it with a
+                 subset of
                  rest,graphql,jsonrpc,mcp,connect,webdav,feeds,rdf.
                  --public-url sets the absolute base used by feeds and RDF
                  IRIs behind a proxy. --cors is off by default on purpose:
@@ -213,13 +215,20 @@ try {
 
     case 'serve': {
       const v = await open();
+      // §10.6: report the state honestly. `serve` rebuilds in memory, so the
+      // answer is `fresh` only when the stored indexes already matched the
+      // content it just hashed.
+      await v.loadIndexes();
+      const before = await v.indexState().catch(() => ({ fresh: false }));
       await v.reindex();
       const forced = flag('principal');
+      // Left out, the manifest's publish.interop decides (§3.1); a manifest
+      // that says nothing about profiles mounts everything.
       const picked = flag('surfaces');
       const chosen = picked && picked !== true
         ? new Set(String(picked).split(',').map((x) => x.trim()).filter(Boolean))
-        : new Set(ALL_SURFACES);
-      for (const name of chosen) {
+        : undefined;
+      for (const name of chosen ?? []) {
         if (!ALL_SURFACES.includes(name)) {
           throw new Error(`unknown surface ${name}; known: ${ALL_SURFACES.join(', ')}`);
         }
@@ -232,6 +241,7 @@ try {
         publicUrl: flag('public-url') || undefined,
         cors: flag('cors') || null,
       });
+      g.indexState = before.fresh ? 'fresh' : 'rebuilt';
       const port = Number(flag('port', 4380));
       await g.listen(port);
       const origin = `http://127.0.0.1:${port}`;
@@ -253,7 +263,7 @@ try {
         rdf: 'GET  /graph.jsonld /graph.ttl',
       };
       for (const name of ALL_SURFACES) {
-        if (chosen.has(name)) console.log(C.dim(`  ${lines[name]}`));
+        if (g.router.enabled.has(name)) console.log(C.dim(`  ${lines[name]}`));
       }
       console.log(C.dim(`  every surface at once: ${origin}/.well-known/basalt`));
       break;

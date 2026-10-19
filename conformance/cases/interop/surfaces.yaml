@@ -4,7 +4,7 @@
 # through whatever client its language has, and asserts the named property.
 # No implementation defines its own expectations for behavior the annex covers.
 basalt: 1
-spec: "INTEROP §§1-8"
+spec: "INTEROP 1-8"
 
 # Every method-call surface exposes exactly these operations, under the
 # spelling its own column gives (INTEROP §1.2). `required` is narrower than
@@ -47,9 +47,12 @@ faults:
   - {fault: method_not_allowed, http: 405, connect: unimplemented,     jsonrpc: -32601, graphql: method_not_allowed}
   - {fault: internal,           http: 500, connect: internal,          jsonrpc: -32603, graphql: internal}
 
-profiles:
-  P-REST:
-    spec: "INTEROP §2"
+# One case per profile. `cases` rather than a map because every runner in this
+# repo iterates `cases`, and a suite that a runner cannot see is a conformance
+# claim nobody checks (§14.2).
+cases:
+  - id: P-REST
+    spec: "INTEROP 2"
     routes:
       - {method: GET, path: /api/v1/manifest}
       - {method: GET, path: /api/v1/me}
@@ -70,8 +73,8 @@ profiles:
       - head_returns_headers_without_body
       - mutating_methods_return_405
 
-  P-GRAPHQL:
-    spec: "INTEROP §3"
+  - id: P-GRAPHQL
+    spec: "INTEROP 3"
     endpoint: /graphql
     schema: /graphql/schema.graphql
     requires:
@@ -81,16 +84,16 @@ profiles:
       - introspection_supports_codegen
       - unknown_field_fails_before_execution
 
-  P-JSONRPC:
-    spec: "INTEROP §4.1"
+  - id: P-JSONRPC
+    spec: "INTEROP 4.1"
     endpoint: /rpc
     requires:
       - methods_are_basalt_dot_operation
       - notification_without_id_gets_no_response
       - basalt_operations_describes_the_table
 
-  P-MCP:
-    spec: "INTEROP §4.2"
+  - id: P-MCP
+    spec: "INTEROP 4.2"
     endpoints: [/mcp, "stdio"]
     requires:
       - initialize_echoes_a_supported_version_else_latest
@@ -101,8 +104,8 @@ profiles:
       - resources_read_denial_is_jsonrpc_error
       - stdio_writes_only_jsonrpc_to_stdout
 
-  P-GRPC:
-    spec: "INTEROP §5"
+  - id: P-GRPC
+    spec: "INTEROP 5"
     service: basalt.v1.BasaltRead
     requires:
       - every_operation_has_a_unary_method
@@ -110,8 +113,8 @@ profiles:
       - rights_kinds_decisions_are_strings_not_enums
       - unsupported_codec_answers_unimplemented
 
-  P-WEBDAV:
-    spec: "INTEROP §6"
+  - id: P-WEBDAV
+    spec: "INTEROP 6"
     mount: /dav/
     requires:
       - options_advertises_dav_1
@@ -121,8 +124,8 @@ profiles:
       - every_write_method_returns_405
       - withheld_trees_are_not_mountable
 
-  P-FEEDS:
-    spec: "INTEROP §7"
+  - id: P-FEEDS
+    spec: "INTEROP 7"
     routes: [/feed.atom, /feed.xml, /sitemap.xml, /opensearch.xml, /robots.txt]
     requires:
       - entries_are_readable_and_published_only
@@ -131,16 +134,16 @@ profiles:
       - robots_follows_the_audience_ceiling
       - no_presigned_url_in_any_entry
 
-  P-RDF:
-    spec: "INTEROP §8"
+  - id: P-RDF
+    spec: "INTEROP 8"
     routes: [/graph.jsonld, /graph.ttl]
     requires:
       - node_iri_is_the_gatekeeper_node_url
       - standard_terms_used_where_they_exist
       - redacted_edges_are_counted_not_emitted
 
-  P-INTEROP:
-    spec: "INTEROP §9"
+  - id: P-INTEROP
+    spec: "INTEROP 9"
     requires_profiles: 2
     requires:
       - discovery_document_lists_exactly_the_mounted_surfaces

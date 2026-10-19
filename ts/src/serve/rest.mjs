@@ -7,7 +7,7 @@
 // serves at /api/v1/openapi.json.
 
 import { canonicalJson } from '../canonical.mjs';
-import { Fault, mediaFor } from './core.mjs';
+import { Fault } from './core.mjs';
 
 const API = '/api/v1';
 

@@ -427,3 +427,62 @@ fn declared_conformance_levels() {
         }
     }
 }
+
+/// The interop profiles this implementation claims (§17, INTEROP §10).
+///
+/// Profiles are orthogonal to the §14.1 levels and each requires L4, so they
+/// are declared separately — and, like the levels above, checked rather than
+/// asserted: `P-REST` and `P-MCP` are the two this crate serves, the corpus
+/// has to know them, and the suite that exercises them has to be one this
+/// runner executes.
+#[test]
+fn declared_interop_profiles() {
+    let manifest = load("manifest.yaml");
+    let profiles = manifest
+        .get("profiles")
+        .and_then(|p| p.as_mapping())
+        .expect("manifest names the interop profiles");
+
+    // P-INTEROP is the claim that the two below answer the same questions the
+    // same way, which tests/interop.rs checks as INTEROP §9's E1-E6.
+    let claimed = ["P-REST", "P-MCP", "P-INTEROP"];
+    for profile in claimed {
+        assert!(
+            profiles
+                .get(serde_yaml_ng::Value::String(profile.into()))
+                .is_some(),
+            "{profile} is a profile the corpus knows about"
+        );
+    }
+
+    // What the crate mounts and what it claims must be the same list.
+    let mounted: Vec<&str> = basalt::serve::router::SurfaceKind::ALL
+        .iter()
+        .map(|k| k.profile())
+        .collect();
+    for profile in &mounted {
+        assert!(
+            claimed.contains(profile),
+            "{profile} is mounted but not claimed here"
+        );
+    }
+    assert_eq!(mounted.len() + 1, claimed.len(), "P-INTEROP is the extra claim");
+
+    // A profile suite the runner does not execute is a claim nobody checks.
+    let interop_suites: Vec<String> = manifest
+        .get("suites")
+        .and_then(|x| x.as_sequence())
+        .unwrap()
+        .iter()
+        .filter_map(|suite| s(suite, "file"))
+        .filter(|file| file.starts_with("cases/interop/"))
+        .collect();
+    assert_eq!(
+        interop_suites,
+        vec![
+            "cases/interop/surfaces.yaml".to_string(),
+            "cases/interop/equivalence.yaml".to_string(),
+        ],
+        "tests/interop.rs executes exactly these; a new one needs a runner"
+    );
+}

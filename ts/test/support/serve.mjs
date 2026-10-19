@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Vault } from '../../src/vault.mjs';
 import { FsTransport } from '../../src/transport/fs.mjs';
 import { Gatekeeper } from '../../src/gatekeeper.mjs';
+import { ALL_SURFACES } from '../../src/serve/router.mjs';
 
 export const VAULT = fileURLToPath(
   new URL('../../../conformance/vaults/minimal/vault', import.meta.url));
@@ -14,13 +15,25 @@ export const VAULT = fileURLToPath(
 export const VAULT_ID = '01JBQ7X8Z4N3VYK9M2T5HRWC6P';
 
 /** Identity comes from a test-only header; §12.1 forbids a client asserting it. */
-export async function serve(opts = {}) {
+export async function serve({ interop, mountDeclared = false, ...opts } = {}) {
   const v = new Vault(new FsTransport(VAULT));
   await v.load();
   await v.reindex();
+  // §3.1 `publish.interop`: the fixture declares nothing, so a test that
+  // wants the manifest to bound the surfaces sets it here.
+  if (interop !== undefined) v.manifest.publish = { ...v.manifest.publish, interop };
   const g = new Gatekeeper(v, {
     identify: (req) => req.headers['x-test-principal'] ?? 'anonymous',
     site: null,
+    // These suites exist to exercise the interop surfaces, so they mount them
+    // explicitly. The production default is the §12 REST API alone; relying
+    // on a permissive default here would have hidden that it was permissive.
+    //
+    // `mountDeclared` turns the override off, for the tests that are about
+    // what the manifest and the default actually decide — an explicit
+    // `surfaces` set outranks the manifest, so forcing one here would make
+    // those tests pass no matter what the bounding logic did.
+    ...(mountDeclared ? {} : { surfaces: new Set(ALL_SURFACES) }),
     ...opts,
   });
   await g.listen(0);

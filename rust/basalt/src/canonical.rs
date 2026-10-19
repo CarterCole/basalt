@@ -105,6 +105,19 @@ impl Json {
         self.to_canonical_string().into_bytes()
     }
 
+    /// The same value on one line, with no trailing newline.
+    ///
+    /// Not a §13 serialization and never used for an index object: it exists
+    /// because newline-delimited JSON-RPC (INTEROP §4.1) frames one message
+    /// per line, and canonical JSON is deliberately multi-line. Key order and
+    /// string escaping are the canonical rules either way, so the two forms
+    /// differ only in whitespace.
+    pub fn to_compact_string(&self) -> String {
+        let mut out = String::new();
+        write_compact(self, &mut out);
+        out
+    }
+
     /// Strip the fields §13.2 excludes from cross-implementation comparison:
     /// `generated`, which legitimately differs between two runs, and the
     /// per-entry `etag`, which legitimately differs between two stores.
@@ -135,6 +148,38 @@ impl JsonObject {
     }
     pub fn build(self) -> Json {
         Json::Object(self.0)
+    }
+}
+
+fn write_compact(value: &Json, out: &mut String) {
+    match value {
+        Json::Null => out.push_str("null"),
+        Json::Bool(true) => out.push_str("true"),
+        Json::Bool(false) => out.push_str("false"),
+        Json::Int(i) => out.push_str(&i.to_string()),
+        Json::Str(s) => quote(s, out),
+        Json::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_compact(item, out);
+            }
+            out.push(']');
+        }
+        Json::Object(map) => {
+            out.push('{');
+            for (i, (k, v)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                quote(k, out);
+                out.push(':');
+                write_compact(v, out);
+            }
+            out.push('}');
+        }
     }
 }
 

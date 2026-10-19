@@ -213,7 +213,7 @@ failure into a mystery later.
 On stdio, **stdout carries JSON-RPC and nothing else**. Diagnostics go to
 stderr.
 
-### 5. gRPC and Connect
+## 5. gRPC and Connect
 
 [basalt.proto](basalt.proto) is the schema: service `basalt.v1.BasaltRead`,
 one unary method per operation.
@@ -309,10 +309,21 @@ Answers MUST agree.
 | E5 | What happens for a withheld tree path? | all — MUST be `not_found` |
 | E6 | After warming the cache as P1, what does P2 see? | all — MUST be P2's own view, in either order |
 | E7 | Do the operation table, the proto and the SDL list the same operations? | the descriptions themselves |
+| E8 | Where two implementations could shape the same answer differently, which shape is right? | the invariants listed in the corpus |
 
 E6 is run in both orders deliberately: a cache keyed on anything less than the
 subject set serves whichever principal arrived first, and that failure is
 invisible to a single-principal test suite.
+
+E8 is the list that running two implementations side by side actually
+produced: the subject set's order, which field `display_name` comes from, the
+order of tag postings, whether an unresolved edge carries an explicit null
+`target`, whether a node's embedded link set is a full `LinkSet`, and whether
+`index_state` describes what the server did. None of them is a §8 failure —
+each was one implementation shaping a reply its own way — and each would have
+broken a client that switched implementations. They live in the corpus, not in
+either codebase, and both implementations are held to them. Expect this list
+to grow the first time a third implementation answers these questions.
 
 ## 10. Profiles and conformance
 
@@ -343,8 +354,15 @@ publish:
   interop: [P-REST, P-GRAPHQL, P-MCP, P-WEBDAV, P-INTEROP]
 ```
 
-A reader MUST treat an undeclared surface as absent even if it answers, and a
-gatekeeper SHOULD NOT mount a surface it does not declare.
+When `publish.interop` is **present** it is a ceiling, in the same shape as
+the §12.2 audience ceiling: a gatekeeper MUST NOT mount a surface the vault
+does not list, so an owner can take one off for every deployment of that vault
+in a single edit. When it is **absent** the vault makes no claim — a vault
+written before this annex says nothing about profiles — and the operator
+decides what to mount.
+
+`P-INTEROP` mounts nothing of its own; it is the claim that the surfaces
+beside it agree.
 
 ## 11. Deliberately not implemented
 

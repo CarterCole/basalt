@@ -22,6 +22,16 @@
 //! This implementation targets **L4**: transport, content, index, security and
 //! the gatekeeper HTTP surface. L5 (history) is not implemented.
 //!
+//! Beyond L4 it serves two interop profiles (§17, `protocol/INTEROP.md` §10):
+//! **`P-REST`**, the §12.3 routes with an OpenAPI 3.1 document generated from
+//! the same route table that dispatches them, and **`P-MCP`**, the Model
+//! Context Protocol over HTTP and stdio. Both go through the one
+//! principal-scoped view in [`serve::Surface`], which is what makes a second
+//! protocol translation rather than a second place to get §8 wrong. The other
+//! profiles the annex defines — GraphQL, gRPC, WebDAV, syndication, RDF — are
+//! not served here; a vault may still declare them for an implementation that
+//! does.
+//!
 //! ```no_run
 //! use basalt::{transport::FsTransport, vault::Vault};
 //!
@@ -42,6 +52,7 @@ pub mod links;
 pub mod manifest;
 pub mod order;
 pub mod security;
+pub mod serve;
 pub mod transport;
 pub mod vault;
 

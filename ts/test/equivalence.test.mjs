@@ -300,10 +300,13 @@ test('equivalence: the interop corpus describes this implementation (§14.2)', a
 
   for (const entry of listed) {
     const file = entry.file.endsWith('surfaces.yaml') ? surfaces : equivalence;
-    const count = file.profiles ? Object.keys(file.profiles).length : file.cases.length;
-    assert.equal(entry.cases, count, `${entry.file} declares ${entry.cases} cases, holds ${count}`);
+    assert.equal(entry.cases, file.cases.length,
+      `${entry.file} declares ${entry.cases} cases, holds ${file.cases.length}`);
+    assert.equal(entry.spec, file.spec, `${entry.file}: spec section`);
   }
-  assert.deepEqual(Object.keys(manifest.profiles).sort(), Object.keys(surfaces.profiles).sort());
+  // Every profile the manifest names has a case saying what it requires.
+  assert.deepEqual(Object.keys(manifest.profiles).sort(),
+    surfaces.cases.map((c) => c.id).sort());
 
   // Operation spellings, per surface.
   assert.deepEqual(surfaces.operations.map((o) => o.name), OPERATIONS.map((o) => o.name));
@@ -326,7 +329,62 @@ test('equivalence: the interop corpus describes this implementation (§14.2)', a
   }
   assert.deepEqual(surfaces.faults.map((r) => r.fault).sort(), Object.keys(FAULTS).sort());
 
-  // The equivalence questions E1-E7 are the ones this suite implements.
+  // The equivalence questions E1-E8 are the ones this suite implements.
   assert.deepEqual(equivalence.cases.map((c) => c.id.split('-')[0]),
-    ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7']);
+    ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'E8']);
+});
+
+test('equivalence: the shape invariants E8 pins (§13.3, §7.1, INTEROP §1.2)', async (t) => {
+  // Each of these was a disagreement found by running this implementation and
+  // the Rust one side by side; the corpus owns the rule, both implementations
+  // are held to it, and this test is the half that holds this one.
+  const corpus = YAML.parse(await readFile(
+    fileURLToPath(new URL('../../conformance/cases/interop/equivalence.yaml', import.meta.url)),
+    'utf8'));
+  const invariants = corpus.cases.find((c) => c.id === 'E8-shape-invariants').invariants;
+  const checked = new Set();
+
+  const ctx = await serve();
+  t.after(() => ctx.g.close());
+  const principal = 'u:reader';
+
+  const me = (await ctx.call('/api/v1/me', { principal })).body;
+  const tags = (await ctx.call('/api/v1/tags', { principal })).body.tags;
+  const links = (await ctx.call('/api/v1/links/Notes%2FHexes.md', { principal })).body;
+  const node = (await ctx.call('/api/v1/node/Notes%2FHexes.md', { principal })).body;
+  const manifest = (await ctx.call('/api/v1/manifest', { principal })).body;
+
+  for (const inv of invariants) {
+    switch (inv.id) {
+      case 'subjects-sorted':
+        assert.deepEqual(me.subjects, [...me.subjects].sort(), inv.rule);
+        assert.ok(me.subjects.includes('g:staff') && me.subjects.includes(principal));
+        break;
+      case 'display-name-from-display':
+        assert.equal(me.display_name, 'A Reader', inv.rule);
+        break;
+      case 'tags-sorted':
+        assert.deepEqual(tags.map((t2) => t2.tag), [...tags.map((t2) => t2.tag)].sort(), inv.rule);
+        break;
+      case 'edge-target-present':
+        for (const edge of links.out) {
+          assert.ok('target' in edge, `${inv.rule} (${edge.raw})`);
+        }
+        assert.equal(links.out.find((e) => e.raw === 'Does Not Exist').target, null);
+        break;
+      case 'node-links-is-a-linkset':
+        assert.equal(node.links.path, 'Notes/Hexes.md', inv.rule);
+        assert.deepEqual(Object.keys(node.links).sort(), Object.keys(links).sort());
+        break;
+      case 'index-state-is-honest':
+        // This vault stores no indexes, so a server that just built them in
+        // memory must not call them `fresh`.
+        assert.ok(['fresh', 'stale', 'rebuilt'].includes(manifest.index_state), inv.rule);
+        break;
+      default:
+        assert.fail(`no check implemented for invariant ${inv.id}`);
+    }
+    checked.add(inv.id);
+  }
+  assert.equal(checked.size, invariants.length);
 });

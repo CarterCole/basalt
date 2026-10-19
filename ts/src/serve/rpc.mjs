@@ -4,7 +4,7 @@
 // method call and no agent protocol. Method names are `basalt.<operation>`.
 
 import { Fault } from './core.mjs';
-import { OPERATIONS, OP_BY_NAME } from './ops.mjs';
+import { OPERATIONS } from './ops.mjs';
 
 export function rpcMethods(surface, principal) {
   const table = {};

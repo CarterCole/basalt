@@ -19,7 +19,7 @@ suites:
 # the same read surface in other protocols, and none is a prerequisite for
 # another.
   - {file: cases/interop/surfaces.yaml,      profile: "*",         spec: "INTEROP 1-8", cases: 9}
-  - {file: cases/interop/equivalence.yaml,   profile: P-INTEROP,   spec: "INTEROP 9",   cases: 7}
+  - {file: cases/interop/equivalence.yaml,   profile: P-INTEROP,   spec: "INTEROP 9",   cases: 8}
 
 vaults:
   - {dir: vaults/minimal, level: L2, note: "byte-exact index reproduction (§13)"}

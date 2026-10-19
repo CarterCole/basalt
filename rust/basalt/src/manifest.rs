@@ -52,6 +52,14 @@ pub struct Manifest {
     pub anonymous_principal: String,
     pub deny_unresolved: bool,
     pub redact_titles: bool,
+    /// The interop profiles this vault declares (§17, INTEROP §10).
+    ///
+    /// Present, it is a ceiling in the same shape as the §12.2 audience
+    /// ceiling: a gatekeeper MUST NOT mount a surface the vault does not
+    /// list. Absent — an empty vector here — the vault makes no claim, since
+    /// a vault written before the annex says nothing about profiles, and the
+    /// operator decides what to mount.
+    pub interop: Option<Vec<String>>,
 }
 
 impl Manifest {
@@ -119,6 +127,12 @@ impl Manifest {
                 .and_then(|s| s.get("redact_titles"))
                 .and_then(|b| b.as_bool())
                 .unwrap_or(true),
+            // None and Some(vec![]) are different answers: the first is "this
+            // vault says nothing", the second is "this vault serves none".
+            interop: publish
+                .and_then(|p| p.get("interop"))
+                .and_then(|i| i.as_sequence())
+                .map(|seq| seq.iter().filter_map(yaml_text).collect()),
         })
     }
 

@@ -7,6 +7,8 @@ vault:
 publish:
   audience: public
   home: Start Here.md
+  # a public vault: the read API, plus RSS/Atom/sitemap/robots
+  interop: [P-REST, P-FEEDS]
 index:
   stale_policy: rebuild
 security:

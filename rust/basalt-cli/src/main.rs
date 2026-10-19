@@ -8,6 +8,7 @@
 use basalt::acl::RIGHTS;
 use basalt::canonical::Json;
 use basalt::frontmatter::Severity;
+use basalt::serve::router::SurfaceKind;
 use basalt::transport::{FsTransport, Transport};
 use basalt::vault::{IndexState, Vault, INDEX_KEYS};
 use std::collections::BTreeMap;
@@ -31,8 +32,26 @@ basalt — a Rust implementation of the Basalt Protocol v1 (conformance L0-L4)
                   Mint node ids for unbound objects (§4.3).
 
   basalt serve    [--vault DIR | --bucket B] [--port N] [--principal ID]
-                  Run the gatekeeper (§12). --principal forces an identity for
-                  local testing; without it every request is anonymous.
+                  [--surfaces LIST]
+                  Run the gatekeeper (§12) and the interop surfaces it
+                  declares: REST with an OpenAPI 3.1 document (P-REST) and the
+                  Model Context Protocol over HTTP (P-MCP). --principal forces
+                  an identity for local testing; without it every request is
+                  anonymous. Without --surfaces the vault's own
+                  publish.interop decides; --surfaces rest,mcp overrides it.
+
+  basalt mcp      [--vault DIR | --bucket B] [--principal ID]
+                  Serve one vault to an MCP client over stdio (INTEROP §4.2).
+                  stdout carries JSON-RPC and nothing else; diagnostics go to
+                  stderr. The principal is fixed for the life of the process.
+
+  basalt schema   <openapi|discovery> [--vault DIR] [--base URL]
+                  Print the machine-readable description of a surface: the
+                  OpenAPI 3.1 document the server serves at
+                  /api/v1/openapi.json, or the /.well-known/basalt discovery
+                  document. The GraphQL SDL and the protobuf service belong to
+                  surfaces this implementation does not serve; see
+                  protocol/INTEROP.md.
 
   basalt effective --path P [--principal ID]
                   Effective rights with the deciding ACE per right (§8.7).
@@ -336,6 +355,12 @@ fn run(args: &Args) -> Result<ExitCode, String> {
                 // `identify` that reads a trusted session instead.
                 gk = gk.with_fixed_principal(who);
             }
+            // Left out, the manifest's publish.interop decides (§3.1); a
+            // manifest that says nothing serves the §12 read API alone,
+            // because profiles are opt-in (§14.1).
+            if let Some(list) = args.get("surfaces") {
+                gk = gk.with_surfaces(parse_surfaces(list)?);
+            }
             gk.set_index_state(state);
             let addr = format!("127.0.0.1:{}", args.or("port", "4380"));
             println!(
@@ -344,8 +369,62 @@ fn run(args: &Args) -> Result<ExitCode, String> {
                 paint::dim(&format!("vault {vault_id}")),
                 paint::dim(&format!("index {}", state.as_str()))
             );
-            println!("  http://{addr}/api/v1/manifest");
+            for kind in SurfaceKind::ALL {
+                if !gk.router().has(kind) {
+                    continue;
+                }
+                let line = match kind {
+                    SurfaceKind::Rest => "GET  /api/v1/{manifest,me,tree,nodes,node/<path>,raw/<path>,list/<folder>,links/<path>,search?q=,tags,effective?path=}",
+                    SurfaceKind::Mcp => "POST /mcp              · or `basalt mcp` over stdio",
+                };
+                println!("  {}", paint::dim(line));
+            }
+            println!(
+                "  {}",
+                paint::dim(&format!("every surface at once: http://{addr}/.well-known/basalt"))
+            );
             Arc::new(gk).listen(&addr).map_err(|e| e.to_string())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        "mcp" => {
+            use basalt::serve::mcp;
+            use basalt::serve::surface::Surface;
+            let mut v = open(args)?;
+            let state = v.ensure_indexes().map_err(|e| e.to_string())?;
+            let vault_id = v.manifest.vault_id.clone();
+            let principal = args.or("principal", "anonymous");
+            let surface = Surface::new(v);
+            surface.set_index_state(state);
+            // stdout is the JSON-RPC channel, so the startup line goes to
+            // stderr: anything else there breaks the framing (INTEROP §4.2.1).
+            eprintln!("basalt mcp: vault {vault_id} as {principal}");
+            let methods = mcp::methods(&surface, &principal, env!("CARGO_PKG_VERSION"));
+            methods.serve_stdio().map_err(|e| e.to_string())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        "schema" => {
+            use basalt::serve::router::Router;
+            use basalt::serve::surface::Surface;
+            let which = args.bare.first().cloned().unwrap_or_default();
+            let base = args.or("base", "http://127.0.0.1:4380");
+            let mut v = open(args)?;
+            match which.as_str() {
+                "openapi" => {
+                    let router = Router::new(Surface::new(v));
+                    print!("{}", router.openapi(&base).to_canonical_string());
+                }
+                "discovery" => {
+                    let state = v.ensure_indexes().map_err(|e| e.to_string())?;
+                    let router = Router::new(Surface::new(v));
+                    router.surface.set_index_state(state);
+                    print!("{}", router.discovery(&base).to_canonical_string());
+                }
+                other => {
+                    return Err(format!(
+                        "schema takes one of: openapi, discovery (got {other:?})"
+                    ))
+                }
+            }
             Ok(ExitCode::SUCCESS)
         }
         "" | "help" | "--help" | "-h" => {
@@ -572,4 +651,25 @@ fn print_first_difference(want: &Json, got: &Json) {
             return;
         }
     }
+}
+
+/// `--surfaces rest,mcp` — the operator's override of what the manifest
+/// declares (INTEROP §10).
+fn parse_surfaces(list: &str) -> Result<std::collections::BTreeSet<SurfaceKind>, String> {
+    let mut out = std::collections::BTreeSet::new();
+    for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        match SurfaceKind::parse(name) {
+            Some(kind) => {
+                out.insert(kind);
+            }
+            None => {
+                let known: Vec<&str> = SurfaceKind::ALL.iter().map(|k| k.as_str()).collect();
+                return Err(format!(
+                    "unknown surface {name:?}; this implementation serves: {}",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(out)
 }

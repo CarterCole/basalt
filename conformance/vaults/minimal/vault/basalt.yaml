@@ -6,6 +6,8 @@ vault:
 publish:
   audience: gated
   home: Notes/Start Here.md
+  # the §12 read API only; this fixture tests the core, not interop
+  interop: [P-REST]
 index:
   stale_policy: rebuild
 security:

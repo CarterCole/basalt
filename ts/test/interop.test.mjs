@@ -34,6 +34,40 @@ test('discovery: one document names every mounted surface (§1.4)', async (t) =>
   assert.equal(gone.status, 404);
 });
 
+test('discovery: the manifest bounds what may be mounted (§3.1, INTEROP §10)', async (t) => {
+  // A vault owner takes a surface off for every deployment in one edit, the
+  // same shape as the §12.2 audience ceiling.
+  const bounded = await serve({
+    interop: ['P-REST', 'P-MCP', 'P-INTEROP'], mountDeclared: true,
+  });
+  t.after(() => bounded.g.close());
+
+  const d = await bounded.call('/.well-known/basalt');
+  assert.deepEqual(Object.keys(d.body.surfaces).sort(), ['mcp', 'rest']);
+  assert.equal((await bounded.call('/api/v1/manifest', { principal: 'u:reader' })).status, 200);
+  assert.equal((await bounded.call('/graph.ttl', { principal: 'u:reader' })).status, 404);
+  assert.equal((await bounded.call('/dav/', {
+    principal: 'u:reader', method: 'PROPFIND', headers: { depth: '0' },
+  })).status, 404);
+
+  // A manifest that says nothing gets the §12 read surface and nothing else.
+  // Profiles are opt-in (§14.1): silence means deny everywhere else in this
+  // protocol, and a vault written before a profile existed cannot have
+  // consented to serving it.
+  const quiet = await serve({ mountDeclared: true });
+  t.after(() => quiet.g.close());
+  const all = await quiet.call('/.well-known/basalt');
+  assert.deepEqual(Object.keys(all.body.surfaces).sort(), ['rest'],
+    'a silent manifest must not mount interop profiles');
+
+  // The operator can still ask for more; the vault just never implies it.
+  const opted = await serve({ mountDeclared: true, surfaces: new Set(['rest', 'rdf']) });
+  t.after(() => opted.g.close());
+  assert.deepEqual(
+    Object.keys((await opted.call('/.well-known/basalt')).body.surfaces).sort(),
+    ['rdf', 'rest']);
+});
+
 // --------------------------------------------------------------------- REST
 
 test('REST: the OpenAPI document describes every route it serves (§2)', async (t) => {

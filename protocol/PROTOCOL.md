@@ -1149,6 +1149,15 @@ are specified in [INTEROP.md](INTEROP.md) §10; a vault declares them in
 do not stack: speaking GraphQL implies nothing about speaking WebDAV, and
 neither is a prerequisite for the other.
 
+Profiles are **opt-in**. A server MUST NOT mount a profile that the vault has
+not declared and the operator has not asked for; a manifest with no
+`publish.interop` key serves the §12 read surface and nothing else. Silence
+means deny everywhere else in this protocol — an unmatched right (§8.4), an
+unresolvable subject (§8.4), an undeclared audience (§12.2) — and a vault
+written before a profile existed cannot have consented to it. Mounting every
+surface an implementation happens to support would also enlarge the §12.5
+filtering obligation without anyone choosing to.
+
 ### 14.2 The fixture corpus
 
 `conformance/` holds language-neutral cases. Every implementation ships a

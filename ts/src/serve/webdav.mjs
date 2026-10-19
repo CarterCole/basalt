@@ -10,7 +10,7 @@
 // would have to implement LOCK for writes it cannot perform.
 
 import { Fault, mediaFor } from './core.mjs';
-import { parentFolder, basename } from '../keys.mjs';
+import { basename } from '../keys.mjs';
 
 const MOUNT = '/dav';
 const ALLOW = 'OPTIONS, GET, HEAD, PROPFIND';

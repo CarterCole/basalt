@@ -5,7 +5,7 @@
 # principal that can list Notes/ but not read Notes/Columns.md — the shape
 # that catches a surface filtering by the wrong thing.
 basalt: 1
-spec: "INTEROP §9"
+spec: "INTEROP 9"
 vault: vaults/minimal
 
 principals:
@@ -85,3 +85,38 @@ cases:
     question: "Do the descriptions of the operations agree with each other?"
     compare: [operation_table, "protocol/basalt.proto", graphql_sdl, openapi_document]
     expect: {same_operation_set: true}
+
+  - id: E8-shape-invariants
+    question: "Where two implementations could shape the same answer differently, which shape is right?"
+    note: >
+      Every rule here is a disagreement that was found by running two
+      implementations side by side against vaults/minimal and diffing the
+      answers. None of them is a §8 failure — each was one implementation
+      shaping a reply its own way — and each would have broken a client that
+      switched implementations, which is exactly what the annex's equivalence
+      claim is about. They are pinned here rather than in either codebase.
+    invariants:
+      - id: subjects-sorted
+        ask: me
+        spec: "13.3"
+        rule: "`subjects` is the subject set in §13.3 order, not the principal followed by its groups."
+      - id: display-name-from-display
+        ask: me
+        spec: "7.1"
+        rule: "`display_name` carries the user record's `display` field; §7.1 spells it `display`."
+      - id: tags-sorted
+        ask: tags
+        spec: "13.3"
+        rule: "Tag postings are in §13.3 order, not the order the indexer discovered them in."
+      - id: edge-target-present
+        ask: links
+        spec: "INTEROP 1.2"
+        rule: "Every out-edge carries `target`, explicitly null when the edge resolves to nothing, so a client never has to tell a missing key from a null one."
+      - id: node-links-is-a-linkset
+        ask: node
+        spec: "INTEROP 2"
+        rule: "`node.links` is the same LinkSet the links operation returns, `path` included."
+      - id: index-state-is-honest
+        ask: manifest
+        spec: "10.6"
+        rule: "`index_state` reports what the server actually did: `fresh` only when the stored indexes already matched the content it hashed."

@@ -321,7 +321,10 @@ export class Vault {
       return t ? this.can(principalId, t.path, ['read']).allowed : false;
     };
     const shape = (e, otherId) => {
-      const other = byId.get(otherId);
+      const other = otherId ? byId.get(otherId) : null;
+      // An external or dangling edge has no target, and says so with an
+      // explicit null: a client should not have to tell a missing key from a
+      // null one to know whether an edge resolved (INTEROP §1.2).
       if (!other) return { ...e, to: e.to, target: null };
       if (visible(otherId)) {
         return { ...e, target: { id: other.id, path: other.path, title: other.title } };
@@ -335,7 +338,7 @@ export class Vault {
 
     const out = (this.indexes?.links?.entries ?? [])
       .filter((e) => e.from === node.id)
-      .map((e) => (e.to ? shape(e, e.to) : e));
+      .map((e) => shape(e, e.to));
 
     // Every backlink is returned; invisible sources are redacted in place
     // rather than dropped (§9.5), so the graph stays honest.

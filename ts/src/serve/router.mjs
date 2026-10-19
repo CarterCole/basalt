@@ -7,7 +7,7 @@
 
 import { canonicalJson } from '../canonical.mjs';
 import { Surface } from './core.mjs';
-import { handleRest, openapiDocument, problem } from './rest.mjs';
+import { handleRest, problem } from './rest.mjs';
 import { graphql, printSchema } from './graphql.mjs';
 import { handleText } from './jsonrpc.mjs';
 import { rpcMethods } from './rpc.mjs';
@@ -53,7 +53,10 @@ export class Router {
    * @param {string|null} [opts.cors] an Access-Control-Allow-Origin value.
    *   Off by default: these responses are per-principal, and a wildcard with
    *   credentials is how a cross-origin page reads someone else's vault.
-   * @param {Set<string>} [opts.surfaces] which surfaces to mount.
+   * @param {Set<string>} [opts.surfaces] which surfaces to mount. Omitted,
+   *   the manifest's `publish.interop` bounds the set (§3.1, INTEROP §10);
+   *   a manifest that says nothing gets DEFAULT_SURFACES — the §12 REST API
+   *   alone. Interop profiles are opt-in, never inherited from silence.
    * @param {import('../web/site.mjs').Site|null} [opts.site] the HTML publish
    *   site (§12.6), which takes every path the protocol surfaces do not claim.
    */
@@ -67,7 +70,7 @@ export class Router {
     this.publicUrl = publicUrl ?? null;
     this.cors = cors;
     this.serverVersion = serverVersion;
-    this.enabled = surfaces ?? new Set(ALL_SURFACES);
+    this.enabled = surfaces ?? declaredSurfaces(vault);
     this.surface = new Surface(vault, { delivery });
   }
 
@@ -454,3 +457,53 @@ const FEEDS = {
 };
 
 export const ALL_SURFACES = ['rest', 'graphql', 'jsonrpc', 'mcp', 'connect', 'webdav', 'feeds', 'rdf'];
+
+/** Profile name (INTEROP §10) to the surface it mounts. */
+export const PROFILE_SURFACE = {
+  'P-REST': 'rest',
+  'P-GRAPHQL': 'graphql',
+  'P-JSONRPC': 'jsonrpc',
+  'P-MCP': 'mcp',
+  'P-GRPC': 'connect',
+  'P-WEBDAV': 'webdav',
+  'P-FEEDS': 'feeds',
+  'P-RDF': 'rdf',
+  // P-INTEROP is the claim that two or more of the above agree (INTEROP §9).
+  // It mounts nothing of its own.
+  'P-INTEROP': null,
+};
+
+/**
+ * The surfaces mounted by default when a manifest declares nothing: the §12
+ * read API, and nothing else.
+ *
+ * Every other surface is an interop *profile* (§14.1) — orthogonal to the
+ * conformance levels and not required by any of them — so it is opt-in.
+ */
+export const DEFAULT_SURFACES = ['rest'];
+
+/**
+ * The surfaces a vault's manifest allows.
+ *
+ * A manifest that lists `publish.interop` bounds what may be mounted, so a
+ * vault owner can take a surface off for every deployment of that vault in
+ * one edit — the same shape as the §12.2 audience ceiling.
+ *
+ * A manifest that says nothing gets DEFAULT_SURFACES, **not** everything.
+ * Silence means deny throughout this protocol — an unmatched right is denied
+ * (§8.4 step 5), an unresolvable subject denies (§8.4), an undeclared
+ * audience is `gated` — and a vault written before this annex existed cannot
+ * have consented to serving GraphQL, WebDAV, RDF and an MCP endpoint. An
+ * operator who wants them says so with --surfaces, or the vault does with
+ * `publish.interop`.
+ */
+export function declaredSurfaces(vault) {
+  const declared = vault?.manifest?.publish?.interop;
+  if (!Array.isArray(declared)) return new Set(DEFAULT_SURFACES);
+  const out = new Set();
+  for (const profile of declared) {
+    const surface = PROFILE_SURFACE[profile];
+    if (surface) out.add(surface);
+  }
+  return out;
+}

@@ -10,7 +10,8 @@
 
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../canonical.mjs';
-import { pathToKey, parentFolder, isFolder } from '../keys.mjs';
+import { pathToKey, parentFolder, isFolder, sortUtf8 } from '../keys.mjs';
+import { compareUtf8 } from '../order.mjs';
 import { RIGHTS } from '../acl.mjs';
 
 /**
@@ -93,9 +94,15 @@ export class Surface {
 
   // ------------------------------------------------------- caching (§12.5)
 
-  /** The principal's effective subject set (§8.4 step 1), sorted. */
+  /**
+   * The principal's effective subject set (§8.4 step 1), in §13.3 order.
+   *
+   * Sorted as a whole rather than principal-first: the set is reported on the
+   * wire by `me`, so two implementations that order it differently disagree
+   * about an answer the annex says they must share (INTEROP §1.2).
+   */
   subjects(principalId) {
-    return [principalId, ...[...this.vault.principals.groupsOf(principalId)].sort()];
+    return sortUtf8([principalId, ...this.vault.principals.groupsOf(principalId)]);
   }
 
   /**
@@ -161,7 +168,9 @@ export class Surface {
     const user = this.vault.principals.users.get(principalId) ?? null;
     return {
       principal: principalId,
-      display_name: user?.display_name ?? null,
+      // §7.1 spells it `display` in the file; the wire name stays
+      // `display_name` because that is what the surfaces already publish.
+      display_name: user?.display ?? null,
       subjects: this.subjects(principalId),
       anonymous: principalId === 'anonymous',
     };
@@ -178,9 +187,12 @@ export class Surface {
       text: r.text,
       bytes: r.bytes,
       media_type: mediaFor(path),
+      // The same LinkSet the links route returns, `path` included: the
+      // OpenAPI document says NodeResponse.links is a LinkSet, so it has to
+      // be one.
       links: edges.status === 200
-        ? { out: edges.out, backlinks: edges.backlinks }
-        : { out: [], backlinks: [] },
+        ? { path, out: edges.out, backlinks: edges.backlinks }
+        : { path, out: [], backlinks: [] },
     };
   }
 
@@ -255,7 +267,11 @@ export class Surface {
     return this.#cached('tags', principalId, '', () => {
       const byId = this.#byId();
       const out = [];
-      for (const [tag, ids] of Object.entries(this.vault.indexes?.tags?.entries ?? {})) {
+      // The in-memory tag index is in discovery order; §13.3 order is what a
+      // reader is entitled to, and what the written index/tags.json has.
+      const postings = Object.entries(this.vault.indexes?.tags?.entries ?? {})
+        .sort((a, b) => compareUtf8(a[0], b[0]));
+      for (const [tag, ids] of postings) {
         const nodes = ids
           .map((id) => byId.get(id))
           .filter((n) => n && this.vault.can(principalId, n.path, ['read']).allowed)
