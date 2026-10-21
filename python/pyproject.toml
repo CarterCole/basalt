@@ -19,15 +19,20 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# Both are load-bearing, not conveniences. `regex` carries the Unicode
+# property escapes §9.1 extraction and §13.3 ordering rely on, which `re`
+# does not support; `ruamel.yaml` round-trips comments, which §13.4 requires
+# an implementation to preserve when it edits YAML it did not author.
+dependencies = [
+    "ruamel.yaml>=0.18",
+    "regex>=2024.5.15",
+]
+
 [project.urls]
 Homepage = "https://github.com/CarterCole/basalt"
 Repository = "https://github.com/CarterCole/basalt"
 Issues = "https://github.com/CarterCole/basalt/issues"
 Specification = "https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md"
-dependencies = [
-    "ruamel.yaml>=0.18",
-    "regex>=2024.5.15",
-]
 
 [project.scripts]
 basalt = "basalt.cli:main"

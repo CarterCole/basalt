@@ -1,10 +1,10 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 
 [[package]]
-name = "basalt-protocol"
-version = "0.1.0"
+name = "basalt-vault"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "regex" },
