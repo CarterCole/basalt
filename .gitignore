@@ -12,3 +12,7 @@ dist/
 # Corpus copies made by scripts/sync-corpus.mjs immediately before a release.
 # The corpus itself lives once, at conformance/; these are never committed.
 packaging/*/assets/
+
+# Local MCP client wiring: `basalt mcp` servers pointed at a vault on this
+# machine, so the paths are absolute and mean nothing in another checkout.
+.mcp.json

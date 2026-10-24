@@ -429,7 +429,6 @@ ACEs (§8.2).
 users:
   - id: u:carter
     display: Carter Cole
-    email: carter@example.com
     status: active            # active | suspended
   - id: u:reviewer
     display: Outside Reviewer
