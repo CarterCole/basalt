@@ -14,7 +14,7 @@ import pytest
 
 from basalt.canonical import canonical_json
 from basalt.frontmatter import is_ulid, with_id
-from basalt.indexer import EPOCH
+from basalt.indexer import EPOCH, tokenize
 from basalt.transport.local import LocalTransport
 from basalt.transport.memory import MemoryTransport
 from basalt.vault import EmptyIndexRefused, Vault, ulid
@@ -409,6 +409,20 @@ def test_search_indexes_public_text_only() -> None:
         for postings in terms.values()
         for p in postings
     )
+
+
+def test_tokenize_is_one_definition_of_a_term() -> None:
+    """§10.5 — lowercased, NFC, no stopwords, no one-letter terms.
+
+    Everything that wants "the terms of this text" goes through here, so the
+    search index and the optional topic search cannot disagree about it.
+    """
+    assert tokenize("The Hexagonal COLUMNS, a b2 x_1 and 7") == ["hexagonal", "columns", "b2", "x_1"]
+    assert tokenize("CAFÉ") == ["café"]
+    # NFC is applied to each token: conjoining jamo are all letters, so they stay
+    # one word and compose into the two syllables of 한글.
+    assert tokenize("한글") == ["한글"]
+    assert tokenize("") == []
 
 
 def test_anonymous_read_needs_publish_too() -> None:

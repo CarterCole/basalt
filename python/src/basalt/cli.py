@@ -285,6 +285,28 @@ def cmd_tree(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_find(args: argparse.Namespace) -> int:
+    """Find notes by topic. Not part of the protocol: see :mod:`basalt.topics`."""
+    if bool(args.query) == bool(args.like):
+        raise ValueError("give a query, or --like PATH, but not both")
+    # Imported here so that no other command pays for gensim's start-up.
+    from .topics import TopicSearch
+
+    vault = _open(args)
+    vault.reindex()
+    topics = TopicSearch(vault, num_topics=args.topics)
+    if args.like:
+        hits = topics.related(args.principal, args.like, limit=args.limit)
+    else:
+        hits = topics.find(args.principal, args.query, limit=args.limit)
+
+    if not hits:
+        print(C.dim("no readable notes on that topic"))
+    for hit in hits:
+        print(f"{hit['score']:.2f}  {hit['title'] or hit['path']}  {C.dim(hit['path'])}")
+    return 0
+
+
 def cmd_conformance_regen(args: argparse.Namespace) -> int:
     """Regenerate a conformance vault's ``expected/`` output.
 
@@ -386,6 +408,22 @@ def build_parser() -> argparse.ArgumentParser:
     digest = sub.add_parser("digest", help="print the content digest and freshness")
     _add_transport_flags(digest)
     digest.set_defaults(func=cmd_digest)
+
+    find = sub.add_parser(
+        "find",
+        help="find notes by topic rather than by keyword (optional: needs the 'topics' extra)",
+    )
+    _add_transport_flags(find)
+    find.add_argument("query", nargs="?", help="what the notes are about, in your own words")
+    find.add_argument("--like", metavar="PATH", help="notes on the same topics as this one")
+    find.add_argument("--principal", default="anonymous")
+    find.add_argument("--limit", type=int, default=10)
+    find.add_argument(
+        "--topics",
+        type=int,
+        help="latent dimensions to fit (default: about the square root of the note count)",
+    )
+    find.set_defaults(func=cmd_find)
 
     regen = sub.add_parser(
         "conformance-regen", help="regenerate a conformance vault's expected/ output"

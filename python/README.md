@@ -32,6 +32,13 @@ resolution, ACL evaluation — runs with no cloud dependency installed:
 uv sync --extra s3
 ```
 
+[Topic search](#topic-search-optional-not-protocol) is a second extra, because
+gensim brings numpy and scipy with it:
+
+```bash
+uv sync --extra topics
+```
+
 Dependencies are deliberately few: `ruamel.yaml`, because §13.4 requires
 comments be preserved when an implementation edits YAML it did not author, and
 `regex`, because §9.6's inline-tag grammar and §10.5's tokenizer are written
@@ -81,6 +88,7 @@ basalt serve       run the gatekeeper (§12)
 basalt effective   effective rights with the deciding ACE per right (§8.7)
 basalt tree        the visible tree for a principal
 basalt digest      the content digest and index freshness (§10.6)
+basalt find        find notes by topic (optional, not protocol; needs the topics extra)
 ```
 
 Every command takes either `--vault DIR` or an S3-compatible store:
@@ -112,6 +120,7 @@ src/basalt/
   vault.py        §3     the facade: load, scan, reindex, read, mint
   gatekeeper.py   §12    the HTTP read surface
   cli.py          §14.3  the self-check and friends
+  topics.py       (none) topic search; optional and not protocol, see below
   transport/      §1     the five operations: local, memory, S3
 tests/
   test_conformance.py  the L0-L2 corpus
@@ -121,19 +130,62 @@ tests/
   …
 ```
 
+## Topic search (optional, not protocol)
+
+```bash
+basalt find "volcanic rock" --vault ../conformance/vaults/demo/vault
+basalt find --like "Geology/Basalt.md" --vault ../conformance/vaults/demo/vault
+```
+
+```
+1.00  Basalt  Geology/Basalt.md
+0.88  Columnar Jointing  Geology/Columnar Jointing.md
+0.71  Columns  Start Here.md
+```
+
+`search.json` matches words: a query for "volcanic stone" finds only the notes
+that contain them. `basalt find` fits a latent semantic model (gensim: TF-IDF,
+then a truncated SVD) and ranks notes by how close they are in topic, so a note
+about hexagonal basalt columns answers a query about volcanic stone without
+sharing a word with it. From Python it is `basalt.topics.TopicSearch`, whose
+`find` and `related` take the principal to ask as.
+
+It is not part of the protocol, and these are the places that shows:
+
+- **Python only.** The TypeScript and Rust implementations have no equivalent
+  and the gatekeeper has no route for it; §12.3 is the protocol's read surface
+  and this is not on it.
+- **Nothing is written to the vault.** A fitted model is floating point that
+  moves with library versions, so it is not an index (§0) and cannot be held to
+  byte-identical output (§13). It is fitted on demand and kept in memory.
+- **A model never learns from a note its requester cannot read.** It is fitted
+  per principal over only the notes that principal may read, because a model's
+  vocabulary and loadings carry the text it was fitted to (§8.8), and cached by
+  *which notes those are* rather than by who asked (§12.5). The cost is one fit
+  per distinct visibility set; 300 notes fit in about a fifth of a second.
+- **It needs a few notes to generalise from**: at least three readable ones,
+  and `basalt find` says so rather than returning nothing. The number of topics
+  defaults to about the square root of the note count, since a model with as
+  many dimensions as notes is a keyword match; `--topics` overrides it.
+- **Scores below 0.3 are dropped**, a cutoff chosen on a 300-article corpus
+  where the lower scores were mostly noise. `min_score` changes it from Python.
+
 ## Tests
 
 ```bash
 uv run pytest
 ```
 
-216 tests. The 97 that come from `conformance/` define nothing themselves —
+237 tests, of which 15 need the `topics` extra and are skipped without it. The
+97 that come from `conformance/` define nothing themselves —
 every expectation is loaded from the corpus, because §14.2 is explicit that no
 implementation defines its own answers for behavior the spec covers. The rest
 cover the conditions §4–§12 describe in prose that no single fixture exercises
 end to end: duplicate-id repair, orphaned sidecars, protected folders, the
 traverse chain, inline ACLs replacing folder entries, §8.8's search leak rule
-in both directions, and §12.3's 404/403 split.
+in both directions, and §12.3's 404/403 split. The topic tests are about the
+same thing for a model: that its vocabulary never holds a private note's words,
+and that a model warmed by the owner is not served to the reader.
 
 ## Python-specific notes
 

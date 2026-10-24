@@ -42,12 +42,17 @@ basalt = "basalt.cli:main"
 # indexing, link resolution, ACL evaluation — runs with no cloud dependency
 # installed at all.
 s3 = ["boto3>=1.34"]
+# `basalt find` and basalt.topics: topic search over a vault. Not protocol and
+# Python-only, so it cannot be a core dependency: it brings numpy and scipy to
+# a package whose other dependencies are a YAML parser and a regex engine.
+topics = ["gensim>=4.4.0"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
     "ruff>=0.7",
     "boto3>=1.34",
+    "gensim>=4.4.0",
 ]
 
 [build-system]

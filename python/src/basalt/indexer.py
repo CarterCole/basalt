@@ -685,6 +685,22 @@ STOPWORDS = frozenset(
 _TOKEN_RE = re2.compile(r"[\p{L}\p{N}_]+")
 
 
+def tokenize(text: str) -> list[str]:
+    """§10.5 tokens: word runs, lowercased and NFC, minus stopwords and one-letter terms.
+
+    One definition, so that ``search.json`` and anything else that wants "the
+    terms of this text" (the optional topic search among them) cannot drift
+    apart on what a term is.
+    """
+    out: list[str] = []
+    for m in _TOKEN_RE.finditer(text.lower()):
+        t = nfc(m.group(0))
+        if len(t) < 2 or t in STOPWORDS:
+            continue
+        out.append(t)
+    return out
+
+
 def build_search_index(
     *,
     nodes: list[IndexedNode],
@@ -708,10 +724,7 @@ def build_search_index(
         if not is_public(n):
             continue
         counts: dict[str, int] = {}
-        for m in _TOKEN_RE.finditer((n.body if n.body is not None else n.text).lower()):
-            t = nfc(m.group(0))
-            if len(t) < 2 or t in STOPWORDS:
-                continue
+        for t in tokenize(n.body if n.body is not None else n.text):
             counts[t] = counts.get(t, 0) + 1
         for t, tf in counts.items():
             terms.setdefault(t, []).append({"node": n.id, "tf": tf})
@@ -741,4 +754,5 @@ __all__ = [
     "content_hash",
     "envelope",
     "extract_data_links",
+    "tokenize",
 ]

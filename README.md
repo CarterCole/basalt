@@ -51,7 +51,10 @@ bucket, because no S3-like store can express an inherited deny.
   static exporter (L0-L4, all profiles). `rust/` is held to the same corpus
   and serves two of the surfaces itself (L0-L4, `P-REST`, `P-MCP`,
   `P-INTEROP`), which is what makes the equivalence claim cross-language
-  rather than internal. `python/` is L0-L4 with no profiles yet.
+  rather than internal. `python/` is L0-L4 with no profiles yet, plus one
+  thing that is not the protocol and exists only there: optional topic search
+  (`basalt find`, behind the `topics` extra), outside the corpus and never
+  written to a vault.
 
 ## Run it
 
