@@ -35,6 +35,12 @@
     });
   }
 
+  // ------------------------------------------------------------- pdf embeds
+  // A browser with no inline PDF viewer shows the <object> fallback; size the
+  // box to that one line rather than a page-tall empty frame. Undefined in
+  // older browsers, which all have a viewer, so only `false` counts.
+  if (navigator.pdfViewerEnabled === false) root.classList.add('no-pdf-viewer');
+
   // ------------------------------------------------------------- sidebar
   const sidebar = document.querySelector('[data-sidebar]');
   const navBtn = document.querySelector('[data-nav-toggle]');
@@ -181,5 +187,88 @@
     for (const h of headings) io.observe(h);
     addEventListener('scroll', mark, { passive: true });
     mark();
+  }
+
+  // ------------------------------------------------------------- diagrams
+  // A ```mermaid block is readable as code without this. Pages that have one
+  // load the vendored Mermaid bundle (about 5 MB, so only those pages) and
+  // swap each block for its drawing. securityLevel 'strict' is Mermaid's
+  // default, set anyway: diagram source is vault content, so it must not run
+  // script or carry click handlers. A block Mermaid cannot parse, or a
+  // bundle that fails to load, leaves the source showing.
+  const diagrams = [...document.querySelectorAll('pre > code.language-mermaid')]
+    .map((code) => ({ pre: code.parentElement, source: code.textContent, figure: null, sheet: null }));
+
+  if (diagrams.length) {
+    const prefersDark = matchMedia('(prefers-color-scheme: dark)');
+    const isDark = () => (root.dataset.theme
+      ? root.dataset.theme === 'dark' : prefersDark.matches);
+
+    let bundle = null;
+    const loadMermaid = () => (bundle ??= new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `${basePath}/_assets/vendor/mermaid.min.js`;
+      s.onload = () => (window.mermaid ? resolve(window.mermaid) : reject(new Error('no mermaid')));
+      s.onerror = reject;
+      document.head.append(s);
+    }));
+
+    // The site's Content-Security-Policy admits no <style> element and no
+    // style="" attribute, and Mermaid's SVG carries both, so as inserted it
+    // draws every shape solid black. Styles set through the CSSOM are not
+    // subject to style-src, so move them there: the <style> text into a
+    // constructed sheet, each style attribute into element.style.
+    const adoptStyles = (d) => {
+      const svg = d.figure.querySelector('svg');
+      if (!svg) return;
+      if (d.sheet) {
+        document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== d.sheet);
+        d.sheet = null;
+      }
+      const css = [...svg.querySelectorAll('style')]
+        .map((s) => { const text = s.textContent; s.remove(); return text; })
+        .join('\n');
+      if (css && 'adoptedStyleSheets' in document) {
+        try {
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync(css);
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+          d.sheet = sheet;
+        } catch { /* an older browser: shapes keep their default fill */ }
+      }
+      for (const el of [svg, ...svg.querySelectorAll('[style]')]) {
+        const inline = el.getAttribute('style');
+        if (inline) el.style.cssText = inline;
+      }
+    };
+
+    let seq = 0;
+    const draw = async () => {
+      let mermaid;
+      try { mermaid = await loadMermaid(); } catch { return; }
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        theme: isDark() ? 'dark' : 'default',
+      });
+      for (const d of diagrams) {
+        try {
+          const { svg } = await mermaid.render(`basalt-diagram-${++seq}`, d.source);
+          if (!d.figure) {
+            d.figure = document.createElement('figure');
+            d.figure.className = 'diagram';
+            d.pre.replaceWith(d.figure);
+          }
+          d.figure.innerHTML = svg;
+          adoptStyles(d);
+        } catch { /* invalid diagram: its source stays on the page */ }
+      }
+    };
+
+    draw();
+    // Redraw in the other palette when the reader switches theme.
+    toggle?.addEventListener('click', draw);
+    prefersDark.addEventListener?.('change', () => { if (!root.dataset.theme) draw(); });
   }
 })();

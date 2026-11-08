@@ -10,6 +10,7 @@
 // every reader's browser.
 
 import { Marked } from 'marked';
+import katex from 'katex';
 import { resolveTarget, slugify, anchorResolves } from '../links.mjs';
 import { extname } from '../keys.mjs';
 
@@ -158,7 +159,7 @@ export function createRenderer(ctx) {
         return `<a class="${cls}" href="${hrefFor(c.path, c.anchor)}"` +
           `>${escapeHtml(label)}</a>`;
       },
-    }],
+    }, MATH_BLOCK, MATH_INLINE],
     renderer: {
       // Escape author HTML instead of emitting it.
       html(token) { return escapeHtml(token.raw ?? token.text ?? ''); },
@@ -209,14 +210,101 @@ export function createRenderer(ctx) {
   };
 }
 
+/**
+ * TeX math, Obsidian's syntax: `$…$` inline, `$$…$$` displayed.
+ *
+ * Rendered here, on the server, as MathML, which every current browser
+ * draws natively: no script, so math shows with JavaScript off and in a
+ * static export, and no stylesheet or fonts. KaTeX's HTML output would need
+ * inline style attributes and web fonts, both of which the site's
+ * Content-Security-Policy (serve/router.mjs) refuses on purpose.
+ *
+ * `trust: false` (KaTeX's default, stated so nobody loosens it casually)
+ * refuses \href, \url, \includegraphics and \htmlClass: math is vault
+ * content, and `write` on a note is not consent to put links or markup in
+ * every reader's page. A TeX error renders as the red source text rather
+ * than failing the page.
+ */
+function renderMath(tex, displayMode) {
+  return katex.renderToString(tex, {
+    displayMode, throwOnError: false, trust: false, strict: 'ignore', output: 'mathml',
+  });
+}
+
+const MATH_BLOCK = {
+  name: 'mathBlock',
+  level: 'block',
+  start(src) { return src.match(/^ {0,3}\$\$/m)?.index; },
+  tokenizer(src) {
+    const m = /^ {0,3}\$\$([\s\S]+?)\$\$[ \t]*(?:\n+|$)/.exec(src);
+    if (!m || !m[1].trim()) return undefined;
+    return { type: 'mathBlock', raw: m[0], text: m[1].trim() };
+  },
+  renderer(token) {
+    return `<div class="math-display">${renderMath(token.text, true)}</div>\n`;
+  },
+};
+
+// Pandoc's rule for single dollars, so prices are not math: the opening `$`
+// is followed by a non-space, the closing one follows a non-space and is not
+// followed by a digit. "$5 and $10" stays text; "$x^2$" is math.
+const MATH_INLINE = {
+  name: 'mathInline',
+  level: 'inline',
+  start(src) {
+    const i = src.search(/(?<!\\)\$/);
+    return i === -1 ? undefined : i;
+  },
+  tokenizer(src) {
+    let m = /^\$\$(?!\$)((?:\\[\s\S]|[^\\$])+?)\$\$/.exec(src);
+    if (m) return { type: 'mathInline', raw: m[0], text: m[1].trim(), display: true };
+    m = /^\$(?![\s$])((?:\\[\s\S]|[^\\$])+?)(?<!\s)\$(?!\d)/.exec(src);
+    if (m) return { type: 'mathInline', raw: m[0], text: m[1], display: false };
+    return undefined;
+  },
+  renderer(token) { return renderMath(token.text, token.display); },
+};
+
+/** URL of a node's raw bytes, as served by the site and written by export. */
+function rawHref(path) {
+  return `/_raw/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+
 function imgTag(path, alt, title) {
-  return `<img class="asset" src="/_raw/${path.split('/').map(encodeURIComponent).join('/')}"` +
+  return `<img class="asset" src="${rawHref(path)}"` +
     ` alt="${escapeHtml(alt ?? '')}" loading="lazy"` +
     `${title ? ` title="${escapeHtml(title)}"` : ''}>`;
 }
 
 /**
- * An embed (`![[…]]`): an image inline, a note transcluded one level deep.
+ * A PDF embed, shown by the browser's own viewer.
+ *
+ * No viewer is bundled: every desktop browser renders application/pdf
+ * itself, and the browser vendor keeps that parser patched. `<object>` rather
+ * than `<iframe>` because a browser without an inline viewer (most phones)
+ * renders the fallback content instead of downloading the file, and no
+ * `sandbox`, because Chrome refuses to run its viewer in a sandboxed frame.
+ * `#page=N` is the PDF open parameter, kept so `![[x.pdf#page=3]]` opens
+ * where the author pointed.
+ */
+function pdfEmbed(c) {
+  const page = /^page=(\d+)$/i.exec(c.anchor ?? '')?.[1];
+  const src = rawHref(c.path) + (page ? `#page=${page}` : '');
+  const label = c.alias ?? c.title;
+  const href = hrefFor(c.path);
+  return `<figure class="embed-figure embed-pdf">` +
+    `<object class="asset-pdf" data="${escapeHtml(src)}" type="application/pdf"` +
+    ` aria-label="${escapeHtml(label)}">` +
+    `<span class="embed-fallback">This browser cannot show the PDF here.` +
+    ` <a class="lk lk-note" href="${href}">Open the PDF</a></span>` +
+    `</object>` +
+    `<figcaption><a class="lk lk-note" href="${href}">${escapeHtml(label)}</a>` +
+    `</figcaption></figure>`;
+}
+
+/**
+ * An embed (`![[…]]`): an image or PDF inline, a note transcluded one level
+ * deep.
  *
  * Transclusion does not recurse. A note that embeds a note that embeds the
  * first would otherwise render forever, and vaults do contain that cycle.
@@ -227,6 +315,7 @@ function renderEmbed(c, ctx) {
       (c.entry?.title ? `<figcaption>${escapeHtml(c.entry.title)}</figcaption>` : '') +
       `</figure>`;
   }
+  if (extname(c.path) === '.pdf') return pdfEmbed(c);
 
   const text = ctx.embedText?.(c.path);
   if (text == null) {

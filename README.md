@@ -183,6 +183,21 @@ asset's sidecar. `--principal u:someone` evaluates that principal's
 `create_child` right instead of acting as the operator. Buckets work the same
 way: swap `--vault` for `--bucket`.
 
+On the publish site (`serve`, or a static `export`), a note is GitHub-flavoured
+Markdown plus Obsidian's syntax:
+
+- `![[photo.png]]` shows an image.
+- `![[survey.pdf]]` shows a PDF in the browser's own viewer;
+  `![[survey.pdf#page=3]]` opens it at page 3.
+- `![[Other note]]` transcludes a note, one level deep.
+- `$…$` and `$$…$$` are TeX math, rendered on the server by KaTeX to
+  MathML, which browsers draw natively: no script, stylesheet or web font.
+- ` ```mermaid ` blocks are drawn in the browser by Mermaid, loaded only on
+  pages that have one. Mermaid's browser bundle is vendored; update it with
+  `node scripts/vendor-mermaid.mjs [version]`.
+
+Raw HTML in a note is shown as text, never run.
+
 For an agent, the same operation is a tool on the stdio MCP server, off by
 default:
 

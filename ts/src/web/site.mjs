@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { buildResolver } from '../links.mjs';
 import { pathToKey, parentFolder, basename, extname } from '../keys.mjs';
 import { createRenderer, hrefFor, pathCandidates, escapeHtml } from './markdown.mjs';
+import { vendorFile } from './vendor.mjs';
 import {
   shell, navTree, notePage, homePage, searchPage, errorPage, localGraph, ICON_SVG,
 } from './pages.mjs';
@@ -92,10 +93,11 @@ export class Site {
 
   async #asset(name) {
     if (name === 'icon.svg') return { body: ICON_SVG, type: 'image/svg+xml' };
-    if (!/^[a-z0-9.\-]+$/i.test(name) || name.includes('..')) return null;
+    const vendored = vendorFile(name);
+    if (!vendored && (!/^[a-z0-9.\-]+$/i.test(name) || name.includes('..'))) return null;
     if (!this.assets.has(name)) {
       try {
-        this.assets.set(name, await readFile(path.join(PUBLIC, name)));
+        this.assets.set(name, await readFile(vendored ?? path.join(PUBLIC, name)));
       } catch { return null; }
     }
     return { body: this.assets.get(name), type: mediaFor(name) };

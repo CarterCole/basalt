@@ -20,6 +20,7 @@ import { canonicalJson } from '../canonical.mjs';
 import { buildIndexes, buildSearchIndex } from '../indexer.mjs';
 import { sortUtf8 } from '../keys.mjs';
 import { ICON_SVG } from './pages.mjs';
+import { vendorFile, hasDiagrams, MERMAID_JS } from './vendor.mjs';
 
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
 const ANON = 'anonymous';
@@ -35,8 +36,10 @@ const ANON = 'anonymous';
 export function applyBase(html, base) {
   if (!base || base === '/') return html;
   const prefix = '/' + base.replace(/^\/+|\/+$/g, '');
+  // `data` is <object data>, which a PDF embed uses. The lookbehind keeps an
+  // attribute that only ends in one of these names, like `data-src`, out.
   return html.replace(
-    /\b(href|src)="\/(?!\/)([^"]*)"/g,
+    /(?<![\w-])(href|src|data)="\/(?!\/)([^"]*)"/g,
     (_, attr, rest) => `${attr}="${prefix}/${rest}"`,
   );
 }
@@ -96,6 +99,9 @@ export async function exportSite({ vault, out, base = '', withVault = false, cle
 
   // ---- pages --------------------------------------------------------------
   let pages = 0;
+  // Mermaid's 5 MB bundle is copied only when some page has a diagram.
+  let diagrams = false;
+  const note = (html) => { diagrams ||= hasDiagrams(html); };
   for (const entry of published) {
     const res = await site.handle({
       urlPath: '/' + entry.path.replace(/\.(md|markdown)$/i, ''),
@@ -106,6 +112,7 @@ export async function exportSite({ vault, out, base = '', withVault = false, cle
       log(`  skipped ${entry.path} (status ${res.status})`, 'warn');
       continue;
     }
+    if (entry.kind === 'note') note(String(res.body));
     const body = entry.kind === 'note'
       ? applyBase(markStatic(String(res.body)), base)
       : res.body;
@@ -134,6 +141,10 @@ export async function exportSite({ vault, out, base = '', withVault = false, cle
     await write(path.join('_assets', name), await readFile(path.join(PUBLIC, name)));
   }
   await write(path.join('_assets', 'icon.svg'), ICON_SVG);
+  note(String(home.body));
+  if (diagrams) {
+    await write(path.join('_assets', MERMAID_JS), await readFile(vendorFile(MERMAID_JS)));
+  }
 
   // ---- search, client-side -------------------------------------------------
   // There is no server to query, so the postings ship to the browser. They

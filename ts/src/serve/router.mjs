@@ -260,10 +260,12 @@ export class Router {
         send(res, r.status, r.body, {
           // Content-derived HTML renders no author script (web/markdown.mjs
           // escapes raw HTML), so a strict policy costs nothing and closes the
-          // gap if that ever regresses.
+          // gap if that ever regresses. object-src is for PDF embeds, which
+          // are <object> on this origin's /_raw/ bytes.
           'content-security-policy':
             "default-src 'none'; img-src 'self' data:; style-src 'self'; "
-            + "script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'",
+            + "script-src 'self'; connect-src 'self'; object-src 'self'; "
+            + "base-uri 'none'; form-action 'self'",
           'referrer-policy': 'same-origin',
           ...r.headers,
           // Feed autodiscovery without touching the site's own templates.

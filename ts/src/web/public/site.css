@@ -257,6 +257,32 @@ img.asset { max-width: 100%; height: auto; border-radius: var(--radius); display
 .embed-figure figcaption {
   margin-top: 6px; font-size: 12.5px; color: var(--ink-faint); text-align: center;
 }
+.math-display { margin: 0 0 1.05em; overflow-x: auto; overflow-y: hidden; }
+/* KaTeX colours a TeX error with an inline style, which the CSP refuses. */
+.katex-error { color: #cc0000; }
+.diagram { margin: 0 0 1.05em; overflow-x: auto; text-align: center; }
+.diagram svg { max-width: 100%; height: auto; }
+/* Mermaid sizes a label while the CSP still holds back its style="" (site.js
+   applies it afterwards), so the box can come out taller than the text.
+   Centre the text in whatever box it got. */
+.diagram foreignObject > div {
+  display: flex !important; flex-direction: column;
+  justify-content: center; align-items: center; height: 100%;
+}
+
+.asset-pdf {
+  display: block; width: 100%; height: 75vh; min-height: 420px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-sunk);
+}
+.no-pdf-viewer .asset-pdf { height: auto; min-height: 0; }
+/* Fills the frame, because some browsers with no viewer (embedded webviews)
+   still report navigator.pdfViewerEnabled, so the frame keeps its height. */
+.asset-pdf .embed-fallback {
+  box-sizing: border-box; height: 100%; padding: 18px 16px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; text-align: center; font-size: 13.5px; color: var(--ink-faint);
+}
 
 .transclusion {
   border-left: 3px solid var(--ember) !important;
