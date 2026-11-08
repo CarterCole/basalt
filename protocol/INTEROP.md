@@ -120,10 +120,12 @@ so that "off" and "broken" are distinguishable.
 
 ### 1.5 Rules every surface obeys
 
-1. **Read-only.** §12 defines a read surface. A write surface needs §11
-   history semantics and §8's `write`/`create_child` evaluation, and is out of
-   scope for v1. Every surface MUST refuse mutating requests: HTTP 405,
-   `unimplemented`, or a GraphQL schema with no `Mutation` type.
+1. **Read-only.** §12 defines a read surface. Replacing or deleting needs §11
+   history semantics and §8's `write` evaluation, and is out of scope for v1.
+   Every surface MUST refuse mutating requests: HTTP 405, `unimplemented`, or
+   a GraphQL schema with no `Mutation` type. The one exception is the opt-in,
+   create-only `basalt_store` tool on the **stdio** MCP transport (§4.2.2,
+   PROTOCOL §12.7), which is absent unless the operator turns it on.
 2. **No shared caching.** Every per-principal response MUST carry
    `Cache-Control: private, no-store` and MUST vary on whatever carried the
    identity. A validator (ETag) over a derived response MUST depend on the
@@ -212,6 +214,39 @@ failure into a mystery later.
 
 On stdio, **stdout carries JSON-RPC and nothing else**. Diagnostics go to
 stderr.
+
+#### 4.2.2 `basalt_store` (opt-in, create-only)
+
+A stdio server started with `--writable` (and a named `--principal`; an
+anonymous writer is refused at startup) adds one tool beyond the operation
+table. It lives outside that table on purpose: the table is projected onto
+every method-call surface at once, and a write must not arrive on all of them
+by accident. It is never offered over `POST /mcp`, and a server not started
+with `--writable` lists no such tool and answers `unknown tool`.
+
+| Argument | |
+|---|---|
+| `path` | required; where to put it, relative to the vault root. The extension decides the kind (PROTOCOL §5.1) |
+| `text` | the content, for a note or other UTF-8 text. Exactly one of `text` and `base64` |
+| `base64` | the content, strictly base64-encoded, for an image or any binary file. Not a `data:` URI |
+| `title` | a note's frontmatter `title` if it has none, or an asset's sidecar title |
+| `alt` | alt text, recorded in the sidecar |
+
+The result is `{path, id, kind, media_type, size, content_hash, created,
+created_by, link}`; `created_by` is the record of who stored it (PROTOCOL
+§12.7): the principal, the `--agent` and `--account` labels the operator
+started the process with, the `clientInfo` the client sent in `initialize`,
+and the time. None of it is an argument of the tool, so a model cannot choose
+its own, and a `created_by` it writes into a note is replaced. `link` is a wikilink ready to paste into a note (`![[…]]` for an
+asset), spelled with the full path so it resolves even when the same filename
+exists elsewhere (PROTOCOL §9.2). The tool carries `readOnlyHint: false` and
+`destructiveHint: false`, which is a stronger claim than most write tools can
+make and is true only because the rules in PROTOCOL §12.7 hold.
+
+Refusals are tool errors (§1.3) with `{error, status, detail}`. Besides the
+shared fault table, two codes exist for this tool alone: `conflict` (409, the
+path is taken or collides) and `too_large` (413). They are not rows in the
+fault table, which is owned by the corpus and has no write cases yet.
 
 ## 5. gRPC and Connect
 
@@ -370,7 +405,9 @@ Stated so that the gaps are choices rather than surprises.
 
 - **Write surfaces** on every protocol (REST `PUT`, DAV class 2, MCP tools
   that mutate, GraphQL mutations). Blocked on §11 history and §8's write
-  rights, not on protocol work.
+  rights, not on protocol work. The exception is creation, which cannot
+  destroy anything: `basalt_store` on stdio MCP (§4.2.2), and nowhere else.
+  Replace and delete remain unimplemented.
 - **Binary gRPC and gRPC-Web** in-process: needs HTTP/2 and a protobuf codec.
   The proto plus a Connect-aware proxy covers the same clients.
 - **Subscriptions, SSE, webhooks.** A read-only gatekeeper over a store with

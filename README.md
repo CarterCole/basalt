@@ -143,8 +143,10 @@ cd rust && cargo run -p basalt-cli -- serve --vault ../conformance/vaults/demo/v
 cd rust && cargo run -p basalt-cli -- mcp --vault ../conformance/vaults/demo/vault --principal u:carter
 ```
 
-**Stated honestly.** Every surface is read-only: §12 defines a read surface,
-and a write path needs the §11 history semantics first. Binary gRPC and
+**Stated honestly.** Every network surface is read-only: §12 defines a read
+surface, and replacing or deleting needs the §11 history semantics first. The
+one write is [creating](#storing-notes-images-and-files), which cannot destroy
+anything, and it is off unless you ask. Binary gRPC and
 gRPC-Web need HTTP/2 or a Connect-aware proxy — this process serves the JSON
 codec, and the `.proto` is there so clients can be generated. The GraphQL
 executor is hand-written and covers queries, variables, aliases, fragments,
@@ -159,6 +161,89 @@ Against an object store, the only change is the transport:
 ```bash
 node ts/bin/basalt.mjs check --bucket my-vault --flavor r2 --endpoint https://ACCOUNT.r2.cloudflarestorage.com
 ```
+
+## Storing notes, images and files
+
+A note, an image, a PDF or any other file goes in as a **new object**: it gets
+an id, a sidecar entry if it cannot carry frontmatter (§6.1), and the indexes
+are refreshed, so it is linkable (`![[Assets/photo.png]]`) and under the same
+access control as everything else the moment it lands. Its text is searchable
+wherever §8.8 allows that: only for nodes `everyone` may read.
+
+From the command line, as the operator who holds the vault's credentials:
+
+```bash
+node ts/bin/basalt.mjs add ~/Pictures/photo.png ~/Documents/survey.pdf Idea.md --vault path/to/vault
+```
+
+Notes go to `Notes/` and everything else to `Assets/` unless you say
+`--to Folder/`; `--as Notes/Name.md` names the exact path of a single file,
+`-` reads stdin, and `--title` / `--alt` fill in the note's title or the
+asset's sidecar. `--principal u:someone` evaluates that principal's
+`create_child` right instead of acting as the operator. Buckets work the same
+way: swap `--vault` for `--bucket`.
+
+For an agent, the same operation is a tool on the stdio MCP server, off by
+default:
+
+```bash
+node ts/bin/basalt.mjs mcp --vault path/to/vault --principal u:carter --writable
+```
+
+That adds `basalt_store` (`path`, plus `text` for anything UTF-8 or `base64`
+for an image or binary, and optional `title` / `alt`). It is checked against
+the principal's ACL exactly as a read is, and it hands back a `link` to paste
+into a note. `--writable` requires `--principal`, and is never offered over
+`/mcp`.
+
+**Which agent, on which account.** With several Claude or Copilot accounts
+writing to one vault, the server cannot see which one is on the other end of
+the pipe, but each account's MCP config launches its own process, so that is
+where you say:
+
+```bash
+node ts/bin/basalt.mjs mcp --vault path/to/vault --principal u:carter --writable \
+  --agent claude-code --account work
+```
+
+Every object it creates is then stamped, in a note's frontmatter or (for an
+image or file) its entry sidecar:
+
+```yaml
+basalt:
+  id: 01jbq7xb9f2mt7vq4ny8cd3kae
+  created_by:
+    principal: u:carter
+    agent: claude-code
+    account: work
+    client:
+      name: claude-code
+      version: 2.1.0
+    at: 2026-11-08T14:31:00Z
+```
+
+`principal`, `agent` and `account` are what you declared; `client` is what the
+connecting program called itself and is unverified, so it sits apart. None of
+it is an argument of `basalt_store`, and a `created_by` a model types into a
+note is replaced, so a model cannot name its own account. `--agent` and
+`--account` take short labels (`work`, `copilot:acme`), not emails or tokens;
+an email address is refused. Without them a write is still stamped with the
+principal and the time. `basalt add` takes the same two flags and stamps only
+when given them, as whatever you typed. The stamp is provenance, not audit: it
+is in a file, and whoever can edit the file can edit it.
+
+**What it will not do.** It never overwrites, never deletes, and refuses a path
+that is taken or that collides under §2.2 with one that is, so a mistaken
+store cannot destroy a note. It refuses a note that is not UTF-8, any object
+over 25 MiB, and an inline `basalt.acl` in a new note unless the writer also
+holds `write_acl` (otherwise `create_child` would be a way to grant yourself
+anything). Non-notes cannot sit in the vault root. Replace and delete wait on
+§11; the rules are [PROTOCOL §12.7](protocol/PROTOCOL.md). Creating is
+implemented in `ts/` only, and the corpus has no write cases yet, so `rust/`
+and `python/` are not held to it.
+
+Tested against the filesystem, in memory and a local MinIO (create-only puts
+and the conditional sidecar update); not against real AWS S3 or R2.
 
 ## Testing against a real object store
 

@@ -10,6 +10,7 @@
 import { canonicalJson } from '../canonical.mjs';
 import { Fault } from './core.mjs';
 import { OPERATIONS, OP_BY_NAME } from './ops.mjs';
+import { WRITE_OPERATIONS, WRITE_BY_NAME } from './write.mjs';
 import { INVALID_PARAMS } from './jsonrpc.mjs';
 
 /** Versions this server speaks, newest first (INTEROP §4.2.1). */
@@ -31,6 +32,16 @@ Start with basalt_tree or basalt_search to find paths, then basalt_node to read
 one. basalt_links gives the graph around a node; an edge whose target reads
 "redacted" points at a node this principal may not see, and is kept rather than
 dropped so the graph stays honest.`;
+
+// Said only when the operator turned writes on, so a read-only server does not
+// advertise a tool it does not have.
+const WRITE_INSTRUCTIONS = `
+
+This connection can also add to the vault. basalt_store creates a NEW note,
+image or other file and never replaces one: if the path is taken, choose
+another. Writes are checked against the same access control list as reads
+(create_child on the folder), and a refusal comes back as a tool error. Search
+first, so a note is linked to what is already there rather than duplicated.`;
 
 const uriFor = (vaultId, path) =>
   `basalt://${vaultId}/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -65,20 +76,47 @@ export function mcpTools() {
   }));
 }
 
+/** The write tools (PROTOCOL §12.7): offered only to a `writable` server. */
+export function mcpWriteTools() {
+  return WRITE_OPERATIONS.map((op) => ({
+    name: TOOL_PREFIX + op.name,
+    description: op.summary,
+    inputSchema: op.input,
+    annotations: op.annotations,
+  }));
+}
+
 /**
  * Build the method table for one principal.
  *
  * Stateless by design: the HTTP transport builds a table per request so the
  * principal cannot outlive the request that established it (§12.1), and the
  * stdio transport builds one for the life of the process.
+ *
+ * `writable` adds the write tools. It is off unless the operator asks, and the
+ * HTTP transport never passes it: a write endpoint a browser can reach needs
+ * an answer to cross-site requests that a read-only one does not (§12.7).
  */
-export function mcpMethods(surface, principal, { serverName = 'basalt', serverVersion = '1.0.0' } = {}) {
+export function mcpMethods(surface, principal, {
+  serverName = 'basalt', serverVersion = '1.0.0', writable = false, agent, account,
+} = {}) {
   const vaultId = surface.vaultId;
+  const findOp = (name) => OP_BY_NAME.get(name) ?? (writable ? WRITE_BY_NAME.get(name) : undefined);
 
-  const callOp = async (op, args) => op.call(surface, principal, args ?? {});
+  // What the connecting program says it is, from `initialize`. Nothing checks
+  // it, so a write records it as a claim next to what the operator declared
+  // (`agent`, `account`), never in place of it. One table serves one stdio
+  // connection, so closing over it is safe; the HTTP transport builds a table
+  // per request and is never writable.
+  let client;
+
+  // The fourth argument is only for the writes: who is behind this principal.
+  const callOp = async (op, args) => op.call(surface, principal, args ?? {}, { agent, account, client });
 
   return {
     initialize: (params) => {
+      const info = params?.clientInfo;
+      if (info && typeof info === 'object') client = { name: info.name, version: info.version };
       const asked = params?.protocolVersion;
       // §4.2.1: echo a version we both speak, else answer with ours and let
       // the client decide. Silently pretending to speak the client's version
@@ -95,7 +133,7 @@ export function mcpMethods(surface, principal, { serverName = 'basalt', serverVe
           version: serverVersion,
           title: `Basalt vault ${surface.manifest().vault.title ?? vaultId}`,
         },
-        instructions: INSTRUCTIONS,
+        instructions: writable ? INSTRUCTIONS + WRITE_INSTRUCTIONS : INSTRUCTIONS,
       };
     },
 
@@ -103,11 +141,11 @@ export function mcpMethods(surface, principal, { serverName = 'basalt', serverVe
     'notifications/cancelled': () => null,
     ping: () => ({}),
 
-    'tools/list': () => ({ tools: mcpTools() }),
+    'tools/list': () => ({ tools: writable ? [...mcpTools(), ...mcpWriteTools()] : mcpTools() }),
 
     'tools/call': async (params) => {
       const raw = params?.name ?? '';
-      const op = OP_BY_NAME.get(raw.startsWith(TOOL_PREFIX) ? raw.slice(TOOL_PREFIX.length) : raw);
+      const op = findOp(raw.startsWith(TOOL_PREFIX) ? raw.slice(TOOL_PREFIX.length) : raw);
       if (!op) throw { code: INVALID_PARAMS, message: `unknown tool ${raw}` };
       try {
         const data = await callOp(op, params?.arguments);

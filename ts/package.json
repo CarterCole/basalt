@@ -33,6 +33,7 @@
     "./transport/fs": "./src/transport/fs.mjs",
     "./transport/s3": "./src/transport/s3.mjs",
     "./transport/memory": "./src/transport/memory.mjs",
+    "./store": "./src/store.mjs",
     "./gatekeeper": "./src/gatekeeper.mjs",
     "./site": "./src/web/site.mjs",
     "./export": "./src/web/export.mjs",

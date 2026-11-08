@@ -170,10 +170,16 @@ function firstH1(body) {
  * Write a node id into a note's frontmatter, preserving comments and key
  * order (§13.4). Used by the minting pass (§4.3).
  */
-export function withId(text, id) {
+export function withId(text, id, { title, createdBy } = {}) {
   const { raw, body } = splitFrontmatter(text);
   if (raw === null) {
-    return `---\nbasalt:\n  id: ${id}\n---\n${text}`;
+    const head = title ? `title: ${YAML.stringify(title).trimEnd()}\n` : '';
+    // Through the YAML writer, never by interpolation: these strings came from
+    // a client, and a newline in one must not become another frontmatter key.
+    const by = createdBy
+      ? YAML.stringify({ created_by: createdBy }).trimEnd().replace(/^/gm, '  ') + '\n'
+      : '';
+    return `---\nbasalt:\n  id: ${id}\n${by}${head}---\n${text}`;
   }
   const doc = YAML.parseDocument(raw);  // parseDocument retains comments
   const basalt = doc.get('basalt');
@@ -182,6 +188,11 @@ export function withId(text, id) {
   } else {
     doc.set('basalt', doc.createNode({ id }));
   }
+  // Unlike `title`, this is replaced when present: a writer must not be able
+  // to supply its own account by typing a `created_by` into the note.
+  if (createdBy) doc.get('basalt').set('created_by', doc.createNode(createdBy));
+  // `title` is the author's key, so it is only ever filled in, never replaced.
+  if (title && !doc.has('title')) doc.set('title', title);
   const out = String(doc).replace(/\n$/, '');
   return `---\n${out}\n---\n${body}`;
 }

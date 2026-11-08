@@ -46,8 +46,8 @@ function makeTransport(prefix = '') {
   });
 }
 
-/** Create the bucket if it is not already there. */
-async function ensureBucket() {
+/** A client for bucket-level calls the transport does not make. */
+async function adminClient() {
   const sdk = await import('@aws-sdk/client-s3');
   const client = new sdk.S3Client({
     region: FLAVOR === 'r2' ? 'auto' : 'us-east-1',
@@ -58,6 +58,12 @@ async function ensureBucket() {
       secretAccessKey: process.env.BASALT_S3_SECRET,
     },
   });
+  return { sdk, client };
+}
+
+/** Create the bucket if it is not already there. */
+async function ensureBucket() {
+  const { sdk, client } = await adminClient();
   try {
     await client.send(new sdk.CreateBucketCommand({ Bucket: BUCKET }));
   } catch (err) {
@@ -83,6 +89,30 @@ async function uploadVault(t) {
 before(async () => {
   if (skip) return;
   await ensureBucket();
+});
+
+after(async () => {
+  // Remove the bucket this run made, and only that one: a bucket named through
+  // BASALT_S3_BUCKET belongs to whoever named it. Best effort, because a
+  // leftover test bucket is litter, not a failed test.
+  if (skip || process.env.BASALT_S3_BUCKET) return;
+  try {
+    const { sdk, client } = await adminClient();
+    let token;
+    do {
+      const out = await client.send(new sdk.ListObjectsV2Command({
+        Bucket: BUCKET, ContinuationToken: token }));
+      const objects = (out.Contents ?? []).map((o) => ({ Key: o.Key }));
+      if (objects.length) {
+        await client.send(new sdk.DeleteObjectsCommand({
+          Bucket: BUCKET, Delete: { Objects: objects } }));
+      }
+      token = out.IsTruncated ? out.NextContinuationToken : undefined;
+    } while (token);
+    await client.send(new sdk.DeleteBucketCommand({ Bucket: BUCKET }));
+  } catch (err) {
+    console.warn(`s3 tests: could not remove bucket ${BUCKET}: ${err.message}`);
+  }
 });
 
 test('s3: the five operations round-trip', { skip }, async () => {
@@ -257,4 +287,46 @@ test('s3: a prefixed vault does not see a sibling vault in the same bucket', { s
   assert.deepEqual(aKeys, ['content/Notes/OnlyA.md']);
   assert.equal(await a.get('content/Notes/OnlyB.md'), null,
     'a prefixed transport read outside its prefix');
+});
+
+test('s3: storing an image and a note is create-only and keeps the sidecar whole (§12.7)', { skip }, async () => {
+  // The two writes that behave differently on an object store than on a disk:
+  // the content put is conditional on the key being absent (If-None-Match),
+  // and the folder's entry sidecar is a conditional read-modify-write
+  // (If-Match on the etag read), which is what stops two writers un-binding
+  // each other's assets.
+  const { storeObject } = await import('../src/store.mjs');
+  const t = makeTransport('store/');
+  await uploadVault(t);
+  const v = new Vault(t);
+  await v.load();
+  await v.reindex();
+
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]);
+  const img = await storeObject(v, { path: 'Assets/s3.png', bytes: png, title: 'In a bucket' });
+  assert.deepEqual(Buffer.from(await t.get('content/Assets/s3.png')), png);
+
+  const dup = await storeObject(v, { path: 'Assets/s3.png', bytes: Buffer.from('other') })
+    .then(() => null, (e) => e);
+  assert.equal(dup?.code, 'conflict');
+  assert.deepEqual(Buffer.from(await t.get('content/Assets/s3.png')), png,
+    'a refused store must not have replaced the object');
+
+  // Several in parallel into one folder: every sidecar entry survives.
+  const names = ['a', 'b', 'c', 'd'].map((n) => `Assets/p-${n}.png`);
+  const many = await Promise.all(names.map((p) => storeObject(v, { path: p, bytes: png })));
+  const note = await storeObject(v, {
+    path: 'Notes/FromS3.md', bytes: Buffer.from('# From S3\n\n![[Assets/s3.png]]\n') });
+
+  const entry = (p) => v.indexes.nodes.entries.find((e) => e.path === p);
+  assert.equal(entry('Assets/s3.png').id, img.id);
+  for (const [i, p] of names.entries()) assert.equal(entry(p).id, many[i].id);
+  assert.deepEqual(v.indexes.integrity.entries.filter((i) => i.code === 'UNBOUND_NODE'), []);
+  assert.equal(v.indexes.links.entries.find((e) => e.from === note.id).to, img.id);
+
+  // Stored indexes are fresh, and a rebuild from the bucket reproduces them.
+  const reader = new Vault(t);
+  await reader.load();
+  await reader.loadIndexes();
+  assert.equal((await reader.indexState()).fresh, true);
 });

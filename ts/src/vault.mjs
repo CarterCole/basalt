@@ -100,7 +100,13 @@ export class Vault {
       if (root) folderAcls.set('', root);
     }
     this.folderAcls = folderAcls;
-    this.descriptors = new DescriptorStore({ folderAcls, inlineAcls: new Map() });
+    // Inline ACLs come from note frontmatter and so from a reindex, not from
+    // here. A reload keeps the last reindex's, so that reloading the folder
+    // files under a running server never leaves a window in which a note's
+    // inline deny is not being applied.
+    this.descriptors = new DescriptorStore({
+      folderAcls, inlineAcls: this.descriptors?.inlineAcls ?? new Map(),
+    });
   }
 
   // ------------------------------------------------------------- scanning

@@ -349,6 +349,7 @@ can never collide with protocol keys:
 | `basalt.publish` | bool | exclude from publication when `false` |
 | `basalt.aliases` | list of string | alternate names for link resolution (§9.3) |
 | `basalt.created`, `basalt.updated` | RFC 3339 | authored timestamps |
+| `basalt.created_by` | mapping | who stored the note, when it was stored through §12.7 |
 
 Conventional non-reserved keys — `title`, `tags`, `description` — are read if
 present but belong to the user. `title` falls back to the first H1, then to
@@ -411,7 +412,8 @@ entries:
 ```
 
 Keys are entry basenames, not paths. An entry listed here that no longer
-exists MUST be pruned on the next write-capable index pass.
+exists MUST be pruned on the next write-capable index pass. An entry stored
+through §12.7 MAY also carry `created_by`, in the shape given there.
 
 ---
 
@@ -1076,6 +1078,85 @@ export time, and `search.json` is rebuilt over public text only.
 An export is therefore a complete, smaller vault — it carries its own
 manifest and its own digest, and is itself servable by a gatekeeper. "Export"
 and "publish a subset" are the same operation.
+
+### 12.7 Creating objects (optional)
+
+A gatekeeper, or a local tool holding the vault's credentials, MAY accept new
+objects: a note, an image, a PDF, any file. This is not part of the read
+surface (§12.3) and not part of any conformance level (§14.1) — the corpus has
+no write cases yet, and only the TypeScript implementation does it. An
+implementation that does MUST:
+
+1. **Create only.** Refuse a path that already exists, that collides with an
+   existing one under §2.2, or that would make a file of a folder or a folder
+   of a file. Where the store has `conditional_put` (§1) the write MUST be
+   conditional on the key being absent, so losing a race is a refusal and not
+   an overwrite. Replacing and deleting are not specified here: they destroy
+   work, and §11 is what makes that recoverable.
+2. **Require `create_child` on the containing folder** (§8.1), evaluated by
+   §8.4 like any other right, answering 404 or 403 by §12.3's rule applied to
+   that folder. A note whose frontmatter carries `basalt.acl` additionally
+   requires `write_acl` there: an inline descriptor replaces the folder
+   file's entry (§8.6), so honouring it unchecked would let `create_child`
+   grant its holder any right at all.
+3. **Evaluate against the store's current ACLs and principals**, not a copy
+   read at startup. A process that outlives an ACL change MUST NOT keep
+   honouring the old grant.
+4. **Bind identity at birth** (§4.3). Mint a new id — one carried in supplied
+   frontmatter MUST NOT be trusted, since it would attach another node's
+   links and ACLs to the copy. A note takes it in frontmatter; every other
+   kind in the folder's entry sidecar (§6.1), written conditionally on the
+   sidecar's etag and preserving the entries and comments it did not author.
+   Objects other than notes MUST NOT be created in the vault root, whose
+   sidecar has no defined location (§6.1 names `<folder>`).
+5. **Record who stored it.** An implementation SHOULD stamp a new object with
+   `created_by` whenever it knows who is behind the write: always for one
+   arriving over a connection, and for a local one when the operator names an
+   agent or an account. It is `basalt.created_by` in a note's frontmatter and
+   the `created_by` key of the entry otherwise, a mapping with these keys,
+   each omitted when unknown:
+
+   | Key | Meaning |
+   |---|---|
+   | `principal` | the principal the write was evaluated as (§8); absent for the operator acting with the vault's credentials |
+   | `agent` | a label the operator gave the agent, e.g. `claude-code` |
+   | `account` | a label the operator gave the account the agent runs under, e.g. `work` |
+   | `client` | `name` and `version` the connecting program reported in its handshake |
+   | `at` | RFC 3339 UTC time of the store |
+
+   `principal`, `agent` and `account` are declarations by whoever started the
+   process; `client` is a claim by the program on the other end, which nothing
+   verifies, and is kept apart so that a reader can tell the two. All of them
+   MUST come from the operator and the connection, never from the request's
+   arguments or content: a `created_by` in a supplied note MUST be replaced,
+   for the reason an id is (item 4). A client-reported string MUST be written
+   as data (escaped, one line, bounded). `agent` and `account` are names, not
+   contact details or credentials, and an implementation SHOULD refuse any
+   outside `[A-Za-z0-9._:/-]` (at most 64 characters), which keeps an email
+   address out of a file that may be shared or published. The stamp is
+   provenance, not audit: anyone who can edit the file can edit it. The record
+   of an author that its editors cannot change is history (§11).
+6. **Refuse what it cannot hold faithfully.** A note or data object MUST be
+   valid UTF-8. A key under a withheld tree (§12.4), or a name the store's
+   listing would skip — the filesystem transport skips `.git`, `.DS_Store`
+   and `*.tmp` — MUST be refused, because the result could never be read back.
+   An implementation MUST bound object size.
+7. **Leave the vault as fresh as it found it**: write the content, then the
+   sidecar, then rebuild and persist the indexes (§10). In that order a
+   failure after the first write leaves an unbound object that minting
+   repairs (§4.3), rather than a sidecar entry for a name that may belong to
+   nobody.
+8. **Be off unless asked, and local.** The write MUST be an explicit
+   operator choice. It SHOULD be offered only where the caller is a process
+   the operator started and bound to one principal for its lifetime (stdio).
+   An HTTP write endpoint additionally needs an answer to a cross-site
+   request — any web page can POST to a loopback address — that the read
+   surfaces never needed, and none is specified.
+
+A refusal because the path is taken tells a principal holding `create_child`
+that the name is in use even when it cannot read the object. That is inherent
+in any create and is what a filesystem tells you too; it reaches only the
+names in folders the principal can already create in.
 
 ---
 

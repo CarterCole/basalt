@@ -3,7 +3,7 @@
 // conforming implementation: without it, "is my private note actually
 // private" is unanswerable.
 
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Vault, INDEX_KEYS } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
@@ -19,6 +19,8 @@ import { Surface } from '../src/serve/core.mjs';
 import { exportSite } from '../src/web/export.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
 import { RIGHTS } from '../src/acl.mjs';
+import { storeObject, checkProvenanceLabel } from '../src/store.mjs';
+import { kindFor } from '../src/frontmatter.mjs';
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -73,6 +75,23 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
   basalt mint    [--vault DIR | --bucket B]
                  Mint node ids for unbound objects (§4.3).
 
+  basalt add     <FILE>... [--to FOLDER/] [--vault DIR | --bucket B]
+                 [--title T] [--alt A] [--principal ID]
+                 [--agent LABEL] [--account LABEL]
+                 basalt add - --as PATH        (content from stdin)
+                 Store a note, an image or any other file as a NEW object
+                 (§12.7): it gets an id, an entry sidecar if it cannot carry
+                 frontmatter, and the indexes are refreshed. Never
+                 overwrites. Without --to, notes go to Notes/ and everything
+                 else to Assets/. --as gives the exact vault path of a single
+                 file. Without --principal you act as the operator who holds
+                 the vault's credentials; with it, that principal's
+                 create_child right on the folder is enforced. --agent and
+                 --account stamp the new object "created_by" (a note's
+                 frontmatter, or the entry sidecar) with those labels. Here
+                 they are whatever you type, so they are only as true as
+                 you are.
+
   basalt serve   [--vault DIR | --bucket B] [--port N] [--principal ID]
                  [--surfaces LIST] [--public-url URL] [--cors ORIGIN]
                  Serve the publish site and every interop surface (§12,
@@ -88,10 +107,19 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  IRIs behind a proxy. --cors is off by default on purpose:
                  these responses are per-principal.
 
-  basalt mcp     [--vault DIR | --bucket B] [--principal ID]
+  basalt mcp     [--vault DIR | --bucket B] [--principal ID] [--writable]
+                 [--agent LABEL] [--account LABEL]
                  Serve one vault to an MCP client over stdio (INTEROP §4.2).
                  Nothing but JSON-RPC goes to stdout; diagnostics go to
                  stderr. The principal is fixed for the life of the process.
+                 --writable adds basalt_store, which creates new notes,
+                 images and files (never overwrites) subject to that
+                 principal's ACL; it requires --principal. --agent and
+                 --account name who is behind this process ("claude-code",
+                 "work"): every object it creates is stamped "created_by"
+                 with them, the principal, the time, and what the client
+                 called itself. Labels, not emails; each account's MCP
+                 config passes its own.
 
   basalt schema  <openapi|graphql|proto|discovery> [--vault DIR] [--base URL]
                  Print the machine-readable description of a surface: the
@@ -213,6 +241,85 @@ try {
       break;
     }
 
+    case 'add': {
+      // Flags that take a value, so the remaining words are the files.
+      const takesValue = new Set(['vault', 'bucket', 'prefix', 'endpoint', 'region',
+        'flavor', 'to', 'as', 'title', 'alt', 'principal', 'agent', 'account']);
+      const sources = [];
+      for (let i = 1; i < args.length; i++) {
+        if (args[i].startsWith('--')) {
+          if (takesValue.has(args[i].slice(2))) i++;
+        } else sources.push(args[i]);
+      }
+      if (!sources.length) throw new Error('add needs a file to store, or - for stdin with --as PATH');
+
+      const as = flag('as');
+      const to = flag('to');
+      const title = flag('title');
+      const alt = flag('alt');
+      if (as && to) throw new Error('--as names the whole path; --to names only the folder');
+      if (sources.length > 1 && (as || title || alt)) {
+        throw new Error('--as, --title and --alt describe one file; add several with --to FOLDER/');
+      }
+      // No --principal: you are the operator, who holds the credentials and
+      // could write the file by hand. With one, §8 applies as for anyone.
+      const principal = flag('principal') || null;
+      const agent = checkProvenanceLabel('--agent', flag('agent'));
+      const account = checkProvenanceLabel('--account', flag('account'));
+      // Stamp only when asked: an operator filing a PDF by hand has not said
+      // who they are, and inventing a record of it would be worse than none.
+      const provenance = agent || account ? { agent, account } : undefined;
+      const folderFor = (name) => {
+        if (to === undefined) return kindFor(name) === 'note' ? 'Notes/' : 'Assets/';
+        const f = String(to).replace(/^\/+/, '');
+        return f === '' || f.endsWith('/') ? f : f + '/';
+      };
+      const size = (n) => n < 1024 ? `${n} B`
+        : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+      const v = await open();
+      let stored = 0;
+      let refused = 0;
+      for (const src of sources) {
+        try {
+          let bytes;
+          let name;
+          if (src === '-') {
+            if (!as) throw new Error('content from stdin needs --as PATH');
+            const chunks = [];
+            for await (const c of process.stdin) chunks.push(c);
+            bytes = Buffer.concat(chunks);
+          } else {
+            if ((await stat(src)).isDirectory()) {
+              throw new Error('is a directory; add the files in it');
+            }
+            bytes = await readFile(src);
+            // macOS hands out decomposed (NFD) filenames, which §1.1 rejects.
+            name = path.basename(src).normalize('NFC');
+          }
+          const dest = as ?? folderFor(name) + name;
+          const r = await storeObject(v, {
+            principal, path: dest, bytes, title, alt, provenance, reindex: false,
+          });
+          stored++;
+          console.log(`${C.green('stored')}  ${r.path}  ${C.dim(`${r.id}  ${r.kind}, ${size(r.size)}`)}`);
+        } catch (err) {
+          refused++;
+          console.error(`${C.red('refused')} ${src === '-' ? 'stdin' : src}: ${err.message}`);
+        }
+      }
+      if (stored) {
+        // One index pass for the whole batch (the stores skip it for speed).
+        const idx = await v.reindex({ write: true });
+        const issues = idx.integrity.entries;
+        const errs = issues.filter((i) => i.severity === 'error').length;
+        const warns = issues.length - errs;
+        console.log(C.dim(`indexes refreshed · integrity ${errs} errors, ${warns} warnings`));
+      }
+      process.exitCode = refused ? 1 : 0;
+      break;
+    }
+
     case 'serve': {
       const v = await open();
       // §10.6: report the state honestly. `serve` rebuilds in memory, so the
@@ -325,10 +432,26 @@ try {
       const v = await open();
       await v.reindex();
       const principal = flag('principal', 'anonymous');
+      const writable = args.includes('--writable');
+      const agent = checkProvenanceLabel('--agent', flag('agent'));
+      const account = checkProvenanceLabel('--account', flag('account'));
+      if ((agent || account) && !writable) {
+        throw new Error('--agent and --account label what this process writes; they need --writable');
+      }
+      if (writable && principal === 'anonymous') {
+        // An anonymous writer is whatever the ACL says anonymous may do, and
+        // for a vault that never meant to be written that is nothing: fail
+        // loudly here instead of offering a tool that always refuses.
+        throw new Error('--writable needs --principal ID: a write is judged against who made it');
+      }
       const surface = new Surface(v);
+      const who = [agent && `agent ${agent}`, account && `account ${account}`]
+        .filter(Boolean).join(', ');
       process.stderr.write(
-        `basalt mcp: vault ${v.manifest.vault.id} as ${principal}\n`);
-      await serveStdio(mcpMethods(surface, principal));
+        `basalt mcp: vault ${v.manifest.vault.id} as ${principal}` +
+        `${writable ? ' (may create notes, images and files' +
+          `${who ? `; stamped ${who}` : '; stamped with no agent or account, see --agent/--account'})` : ''}\n`);
+      await serveStdio(mcpMethods(surface, principal, { writable, agent, account }));
       break;
     }
 
