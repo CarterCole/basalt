@@ -19,7 +19,7 @@ import { FsTransport } from '../src/transport/fs.mjs';
 import { MemoryTransport } from '../src/transport/memory.mjs';
 import { Surface } from '../src/serve/core.mjs';
 import { mcpMethods } from '../src/serve/mcp.mjs';
-import { storeObject, MAX_STORE_BYTES } from '../src/store.mjs';
+import { storeObject, normalizeCaller, MAX_STORE_BYTES } from '../src/store.mjs';
 import YAML from 'yaml';
 import { canonicalJson } from '../src/canonical.mjs';
 
@@ -453,6 +453,78 @@ test('store: labels are short names, so an email address is refused before anyth
   assert.equal(await stat(path.join(dir, 'content/Notes/Refused.md')).catch(() => null), null);
 });
 
+// ------------------------------------------------- the caller the store names
+
+const IAM_USER = 'arn:aws:iam::123456789012:user/alice';
+const SSO_ROLE = 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Editor_0123abcd';
+/** §12.7's spelling of a segment that holds an `@`, computed independently. */
+const hashed = (seg) => `sha256:${createHash('sha256').update(seg.toLowerCase()).digest('hex').slice(0, 16)}`;
+
+test('store: the caller is stamped between the declared labels and the client\'s claim', async (t) => {
+  const { v, dir } = await scratch(t);
+  await storeObject(v, {
+    principal: 'u:editor', path: 'Notes/Caller.md', bytes: Buffer.from('# c\n'),
+    provenance: { agent: 'claude-code', account: 'work', caller: IAM_USER, client: { name: 'c' } },
+  });
+  const by = await createdBy(dir, 'Notes/Caller.md');
+  assert.deepEqual(Object.keys(by), ['principal', 'agent', 'account', 'caller', 'client', 'at']);
+  assert.equal(by.caller, IAM_USER, 'an ARN with no address in it is kept exactly');
+
+  // An image carries it in its sidecar entry, like the rest of the stamp.
+  await storeObject(v, { path: 'Assets/by-caller.png', bytes: PNG, provenance: { caller: IAM_USER } });
+  const assets = YAML.parse(await readFile(path.join(dir, 'meta/folders/Assets/entries.yaml'), 'utf8'));
+  assert.deepEqual(Object.keys(assets.entries['by-caller.png'].created_by), ['caller', 'at']);
+});
+
+test('store: an email address in the caller is written as a hash, never as itself', async (t) => {
+  const { v, dir } = await scratch(t);
+  const r = await storeObject(v, {
+    principal: 'u:editor', path: 'Notes/Sso.md', bytes: Buffer.from('# s\n'),
+    provenance: { caller: `${SSO_ROLE}/Alice@Example.com` },
+  });
+  assert.equal(r.created_by.caller, `${SSO_ROLE}/${hashed('alice@example.com')}`);
+  const onDisk = await readFile(path.join(dir, 'content/Notes/Sso.md'), 'utf8');
+  assert.ok(!/example\.com/i.test(onDisk), onDisk);
+
+  // The same person under another casing reads as the same person; someone
+  // else does not. An IAM user may have an `@` in its name too.
+  assert.equal(normalizeCaller(`${SSO_ROLE}/alice@example.com`), r.created_by.caller);
+  assert.notEqual(normalizeCaller(`${SSO_ROLE}/bob@example.com`), r.created_by.caller);
+  assert.equal(normalizeCaller('arn:aws:iam::123456789012:user/eng/a@example.com'),
+    `arn:aws:iam::123456789012:user/eng/${hashed('a@example.com')}`);
+});
+
+test('store: a caller that is not an identity is refused before anything is written', async (t) => {
+  const { v, dir } = await scratch(t);
+  for (const caller of [
+    'arn:aws:iam::1:user/a b', `${IAM_USER}\n  account: boss`, 'arn:aws:iam::1:user/<x>',
+    `arn:aws:iam::1:user/${'x'.repeat(600)}`, 'x'.repeat(3000), 5,
+  ]) {
+    const err = await refusal(storeObject(v, {
+      principal: 'u:editor', path: 'Notes/Refused.md', bytes: Buffer.from('x'), provenance: { caller },
+    }));
+    assert.equal(err.code, 'bad_request', JSON.stringify(caller).slice(0, 40));
+  }
+  assert.equal(await stat(path.join(dir, 'content/Notes/Refused.md')).catch(() => null), null);
+  assert.equal(normalizeCaller(undefined), undefined);
+  assert.equal(normalizeCaller(null), undefined);
+});
+
+test('store: a note cannot supply its own caller', async (t) => {
+  const { v, dir } = await scratch(t);
+  const forged = Buffer.from(
+    `---\nbasalt:\n  created_by:\n    caller: arn:aws:iam::999999999999:user/boss\n---\nbody\n`);
+  await storeObject(v, {
+    principal: 'u:editor', path: 'Notes/Forged.md', bytes: forged, provenance: { caller: IAM_USER },
+  });
+  assert.equal((await createdBy(dir, 'Notes/Forged.md')).caller, IAM_USER);
+  // And with no caller to record, the forged one does not survive either.
+  await storeObject(v, {
+    principal: 'u:editor', path: 'Notes/Forged2.md', bytes: forged, provenance: { account: 'work' },
+  });
+  assert.equal((await createdBy(dir, 'Notes/Forged2.md')).caller, undefined);
+});
+
 // --------------------------------------------------------------------- MCP
 
 const text = (res) => JSON.parse(res.content[0].text);
@@ -521,6 +593,17 @@ test('mcp: a write records the operator\'s agent and account, and what the clien
 
   const onDisk = await readFile(path.join(v.t.root, 'content/Notes/Who.md'), 'utf8');
   assert.ok(!onDisk.includes('boss') && !onDisk.includes('someone-else'));
+});
+
+test('mcp: the caller comes from whoever launched the server, never from the model', async (t) => {
+  const { m, v } = await mcpFor(t, 'u:editor', { writable: true, agent: 'claude-code', caller: IAM_USER });
+  const res = await m['tools/call']({ name: 'basalt_store', arguments: {
+    path: 'Notes/Caller.md', text: '# c\n', caller: 'arn:aws:iam::999999999999:user/boss',
+  } });
+  assert.notEqual(res.isError, true, res.content[0].text);
+  assert.equal(text(res).created_by.caller, IAM_USER);
+  const onDisk = await readFile(path.join(v.t.root, 'content/Notes/Caller.md'), 'utf8');
+  assert.ok(!onDisk.includes('999999999999'));
 });
 
 test('mcp: two accounts, same agent: each write names its own', async (t) => {

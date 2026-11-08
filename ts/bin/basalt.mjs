@@ -19,7 +19,7 @@ import { Surface } from '../src/serve/core.mjs';
 import { exportSite } from '../src/web/export.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
 import { RIGHTS } from '../src/acl.mjs';
-import { storeObject, checkProvenanceLabel } from '../src/store.mjs';
+import { storeObject, checkProvenanceLabel, normalizeCaller } from '../src/store.mjs';
 import { kindFor } from '../src/frontmatter.mjs';
 
 const args = process.argv.slice(2);
@@ -59,6 +59,26 @@ async function open() {
   return v;
 }
 
+/**
+ * What the store says the credentials behind this process belong to (§12.7
+ * `caller`), for the writes to record. Asked once, because every write this
+ * process makes is signed with the same credentials. A store that cannot say
+ * gives nothing; one that fails to answer is reported and the writes go
+ * ahead without it, as they did before there was a caller to record.
+ */
+async function lookupCaller(v) {
+  if (typeof v.t.callerIdentity !== 'function') return undefined;
+  try {
+    return normalizeCaller(await v.t.callerIdentity());
+  } catch (err) {
+    // Plain, like the rest of what `basalt mcp` writes to stderr: an MCP
+    // client keeps it in a log file, where colour codes are noise.
+    process.stderr.write('basalt: could not name the caller, so writes will not ' +
+      `record one: ${err.message}\n`);
+    return undefined;
+  }
+}
+
 const USAGE = `basalt — reference implementation of the Basalt Protocol v1
 
   basalt check   [--vault DIR | --bucket B] [--principal ID] [--path P]
@@ -90,7 +110,8 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  --account stamp the new object "created_by" (a note's
                  frontmatter, or the entry sidecar) with those labels. Here
                  they are whatever you type, so they are only as true as
-                 you are.
+                 you are. On AWS S3 the stamp also names the caller: the
+                 ARN AWS reports for the credentials doing the write.
 
   basalt serve   [--vault DIR | --bucket B] [--port N] [--principal ID]
                  [--surfaces LIST] [--public-url URL] [--cors ORIGIN]
@@ -119,7 +140,9 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  "work"): every object it creates is stamped "created_by"
                  with them, the principal, the time, and what the client
                  called itself. Labels, not emails; each account's MCP
-                 config passes its own.
+                 config passes its own. On AWS S3 it also records the
+                 caller, the ARN AWS reports for the process's credentials,
+                 which is the one part of the stamp nobody types.
 
   basalt schema  <openapi|graphql|proto|discovery> [--vault DIR] [--base URL]
                  Print the machine-readable description of a surface: the
@@ -266,9 +289,14 @@ try {
       const principal = flag('principal') || null;
       const agent = checkProvenanceLabel('--agent', flag('agent'));
       const account = checkProvenanceLabel('--account', flag('account'));
-      // Stamp only when asked: an operator filing a PDF by hand has not said
-      // who they are, and inventing a record of it would be worse than none.
-      const provenance = agent || account ? { agent, account } : undefined;
+      const v = await open();
+      // Stamp only when there is something true to say: the labels you typed,
+      // or the caller the store itself names. An operator filing a PDF by hand
+      // into a local folder has said neither, and inventing a record of who
+      // they are would be worse than none.
+      const caller = await lookupCaller(v);
+      const provenance = agent || account || caller ? { agent, account, caller } : undefined;
+      if (caller) console.log(C.dim(`storing as ${caller}`));
       const folderFor = (name) => {
         if (to === undefined) return kindFor(name) === 'note' ? 'Notes/' : 'Assets/';
         const f = String(to).replace(/^\/+/, '');
@@ -277,7 +305,6 @@ try {
       const size = (n) => n < 1024 ? `${n} B`
         : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
-      const v = await open();
       let stored = 0;
       let refused = 0;
       for (const src of sources) {
@@ -445,13 +472,15 @@ try {
         throw new Error('--writable needs --principal ID: a write is judged against who made it');
       }
       const surface = new Surface(v);
+      const caller = writable ? await lookupCaller(v) : undefined;
       const who = [agent && `agent ${agent}`, account && `account ${account}`]
         .filter(Boolean).join(', ');
       process.stderr.write(
         `basalt mcp: vault ${v.manifest.vault.id} as ${principal}` +
         `${writable ? ' (may create notes, images and files' +
-          `${who ? `; stamped ${who}` : '; stamped with no agent or account, see --agent/--account'})` : ''}\n`);
-      await serveStdio(mcpMethods(surface, principal, { writable, agent, account }));
+          `${who ? `; stamped ${who}` : '; stamped with no agent or account, see --agent/--account'}` +
+          `${caller ? `; caller ${caller}` : ''})` : ''}\n`);
+      await serveStdio(mcpMethods(surface, principal, { writable, agent, account, caller }));
       break;
     }
 

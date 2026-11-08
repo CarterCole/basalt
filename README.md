@@ -231,6 +231,7 @@ basalt:
     principal: u:carter
     agent: claude-code
     account: work
+    caller: arn:aws:iam::123456789012:user/carter
     client:
       name: claude-code
       version: 2.1.0
@@ -243,9 +244,24 @@ it is an argument of `basalt_store`, and a `created_by` a model types into a
 note is replaced, so a model cannot name its own account. `--agent` and
 `--account` take short labels (`work`, `copilot:acme`), not emails or tokens;
 an email address is refused. Without them a write is still stamped with the
-principal and the time. `basalt add` takes the same two flags and stamps only
-when given them, as whatever you typed. The stamp is provenance, not audit: it
+principal and the time. `basalt add` takes the same two flags and stamps when
+given them, as whatever you typed. The stamp is provenance, not audit: it
 is in a file, and whoever can edit the file can edit it.
+
+`caller` is the part nobody types. On AWS S3 the process asks STS
+`GetCallerIdentity` at startup, with the same credentials the writes are
+signed with, and records the ARN it gets back, so a vault that several people
+write to with their own IAM users or SSO roles says whose credentials made
+each object, whatever `--principal` they launched with. `basalt add` against
+an AWS bucket records it too, even without `--agent` or `--account`. It
+cannot tell apart people who share one profile, and it is left out on MinIO,
+R2 and a local folder, which have nothing to ask. A role session named after
+an email address (IAM Identity Center does this) is written as a hash of the
+address, so `…/AWSReservedSSO_Editor_0123abcd/alice@example.com` is stamped
+`…/AWSReservedSSO_Editor_0123abcd/sha256:ff8d9819fc0e12bf` and the address
+itself never lands in a note. The ARN does carry the AWS account
+number. If the lookup fails, the process says so on stderr and writes without
+a caller rather than refusing to start.
 
 **What it will not do.** It never overwrites, never deletes, and refuses a path
 that is taken or that collides under §2.2 with one that is, so a mistaken

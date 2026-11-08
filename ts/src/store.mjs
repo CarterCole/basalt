@@ -19,8 +19,9 @@
 //   3. The object gets an identity at birth (§4.3): a frontmatter id for a
 //      note, an entry sidecar (§6.1) for anything that cannot carry
 //      frontmatter. Never an unbound object. The same place records who
-//      stored it (`created_by`: principal, agent, account), so that a vault
-//      written to by several agents and several accounts can say which.
+//      stored it (`created_by`: principal, agent, account, and the caller the
+//      store names for the credentials), so that a vault written to by
+//      several people, agents and accounts can say which.
 //   4. The indexes are rebuilt and persisted, so the vault is exactly as
 //      fresh after a store as before it.
 
@@ -83,6 +84,38 @@ export function checkProvenanceLabel(name, value) {
   return value;
 }
 
+const MAX_CALLER_IN = 2048; // the longest ARN AWS issues
+const MAX_CALLER = 512;
+const CALLER = /^[A-Za-z0-9+=,._\/:-]+$/;
+
+/**
+ * The store's name for the credentials behind a write (PROTOCOL §12.7,
+ * `caller`), made fit to keep in a file that may be shared: an AWS ARN such
+ * as `arn:aws:iam::123456789012:user/alice`.
+ *
+ * A role session is named by whoever assumed the role, and IAM Identity
+ * Center names it after the user, which is very often an email address; IAM
+ * user names may hold an `@` too. So any `/`- or `:`-separated segment with an
+ * `@` in it is replaced by `sha256:` and the first 16 hex digits of the hash
+ * of the segment, lowercased. Different people still read as different, and
+ * whoever knows the address can recompute the hash, but the address itself is
+ * not written down. Anything else outside the ARN alphabet is refused.
+ */
+export function normalizeCaller(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > MAX_CALLER_IN) {
+    throw bad('caller must be a store identity such as an AWS ARN');
+  }
+  const out = value.replace(/[^/:]+/g, (seg) => (seg.includes('@')
+    ? `sha256:${createHash('sha256').update(seg.toLowerCase()).digest('hex').slice(0, 16)}`
+    : seg));
+  if (!CALLER.test(out) || out.length > MAX_CALLER) {
+    throw bad('caller must be a store identity such as an AWS ARN ' +
+      '(letters, digits and + = , . _ / : -, at most 512)');
+  }
+  return out;
+}
+
 /** A client-reported string, made safe to keep: printable, one line, bounded. */
 function cleanClientField(value) {
   if (typeof value !== 'string') return undefined;
@@ -97,10 +130,13 @@ function cleanClientField(value) {
  * `principal`, `agent` and `account` are what the operator declared when it
  * started the process; `client` is what the connecting program called itself
  * in its MCP `initialize`, which nothing verifies. They are kept apart so
- * that a reader can tell a fact from a claim. None of them is read from tool
- * arguments, so the model being served cannot choose its own.
+ * that a reader can tell a fact from a claim. `caller` is neither: it is what
+ * the store itself says the write's credentials belong to (an AWS ARN), so it
+ * is the one field that whoever started the process did not get to choose.
+ * None of them is read from tool arguments, so the model being served cannot
+ * choose its own.
  */
-export function buildCreatedBy({ principal, agent, account, client }, now = new Date()) {
+export function buildCreatedBy({ principal, agent, account, caller, client }, now = new Date()) {
   const name = cleanClientField(client?.name);
   const version = cleanClientField(client?.version);
   const by = {};
@@ -109,6 +145,8 @@ export function buildCreatedBy({ principal, agent, account, client }, now = new 
   if (a) by.agent = a;
   const acct = checkProvenanceLabel('account', account);
   if (acct) by.account = acct;
+  const c = normalizeCaller(caller);
+  if (c) by.caller = c;
   if (name) by.client = { name, ...(version ? { version } : {}) };
   by.at = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
   return by;
@@ -236,7 +274,7 @@ async function addSidecarEntry(vault, folder, name, entry) {
  * @param {string} [args.title] a note's frontmatter title, or an asset's
  *   sidecar title
  * @param {string} [args.alt] an asset's alt text (sidecar only)
- * @param {{agent?: string, account?: string, client?: {name?: string, version?: string}}} [args.provenance]
+ * @param {{agent?: string, account?: string, caller?: string, client?: {name?: string, version?: string}}} [args.provenance]
  *   who is behind `principal`. When given (even empty), the new object is
  *   stamped `created_by` with this, the principal and the time. Left out, no
  *   stamp is written; a note's own supplied `created_by` is then left alone.

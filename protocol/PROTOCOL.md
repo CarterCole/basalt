@@ -1112,30 +1112,47 @@ implementation that does MUST:
 5. **Record who stored it.** An implementation SHOULD stamp a new object with
    `created_by` whenever it knows who is behind the write: always for one
    arriving over a connection, and for a local one when the operator names an
-   agent or an account. It is `basalt.created_by` in a note's frontmatter and
-   the `created_by` key of the entry otherwise, a mapping with these keys,
-   each omitted when unknown:
+   agent or an account or the store names a caller. It is `basalt.created_by`
+   in a note's frontmatter and the `created_by` key of the entry otherwise, a
+   mapping with these keys, each omitted when unknown:
 
    | Key | Meaning |
    |---|---|
    | `principal` | the principal the write was evaluated as (§8); absent for the operator acting with the vault's credentials |
    | `agent` | a label the operator gave the agent, e.g. `claude-code` |
    | `account` | a label the operator gave the account the agent runs under, e.g. `work` |
+   | `caller` | what the store's own identity service says the write's credentials belong to, e.g. the AWS ARN `arn:aws:iam::123456789012:user/alice` |
    | `client` | `name` and `version` the connecting program reported in its handshake |
    | `at` | RFC 3339 UTC time of the store |
 
    `principal`, `agent` and `account` are declarations by whoever started the
    process; `client` is a claim by the program on the other end, which nothing
-   verifies, and is kept apart so that a reader can tell the two. All of them
-   MUST come from the operator and the connection, never from the request's
-   arguments or content: a `created_by` in a supplied note MUST be replaced,
-   for the reason an id is (item 4). A client-reported string MUST be written
-   as data (escaped, one line, bounded). `agent` and `account` are names, not
-   contact details or credentials, and an implementation SHOULD refuse any
-   outside `[A-Za-z0-9._:/-]` (at most 64 characters), which keeps an email
-   address out of a file that may be shared or published. The stamp is
-   provenance, not audit: anyone who can edit the file can edit it. The record
-   of an author that its editors cannot change is history (§11).
+   verifies, and is kept apart so that a reader can tell the two. `caller` is
+   neither: the store reports it for the credentials the write is signed with
+   (on AWS, STS `GetCallerIdentity`, which no IAM policy can deny), so it is
+   the one field that whoever started the process cannot simply type. Where
+   several people write to one vault with their own credentials, it is what
+   tells them apart; where they share one set, it cannot. A store with no such
+   service (MinIO, R2, a filesystem) leaves it out, and an implementation MUST
+   NOT ask an identity service about credentials that belong to another
+   store. All of them MUST come from the operator, the store and the
+   connection, never from the request's arguments or content: a `created_by`
+   in a supplied note MUST be replaced, for the reason an id is (item 4). A
+   client-reported string MUST be written as data (escaped, one line,
+   bounded). `agent` and `account` are names, not contact details or
+   credentials, and an implementation SHOULD refuse any outside
+   `[A-Za-z0-9._:/-]` (at most 64 characters), which keeps an email address
+   out of a file that may be shared or published. A `caller` can hold one
+   anyway — a role session is often named after its user's address — so
+   every `/`- or `:`-separated segment of it containing `@` MUST be written
+   as `sha256:` followed by the first 16 lowercase hex digits of the SHA-256
+   of the segment, lowercased, and a `caller` that then falls outside
+   `[A-Za-z0-9+=,._/:-]` (at most 512 characters) MUST NOT be written. A
+   `caller` names the store account it belongs to (the twelve digits of an
+   AWS ARN), which is worth knowing before a stamped note is published. The
+   stamp is provenance, not audit: anyone who can edit the file can edit it.
+   The record of an author that its editors cannot change is history (§11),
+   and for a store, its own access log.
 6. **Refuse what it cannot hold faithfully.** A note or data object MUST be
    valid UTF-8. A key under a withheld tree (§12.4), or a name the store's
    listing would skip — the filesystem transport skips `.git`, `.DS_Store`

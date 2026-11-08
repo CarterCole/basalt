@@ -82,6 +82,53 @@ export class S3Transport {
     return sdk;
   }
 
+  /**
+   * Who the store says these credentials belong to, or null when this store
+   * has no way to say (PROTOCOL §12.7, `caller`).
+   *
+   * Only AWS answers: STS GetCallerIdentity returns the ARN of whatever
+   * signed the request — an IAM user, or a role session — and needs no IAM
+   * permission at all, so a narrowly scoped writer can still call it. MinIO
+   * and R2 have no equivalent, and an endpoint that is not AWS's is not asked:
+   * signing a request to AWS with another store's keys would only hand AWS a
+   * key id it has no business seeing.
+   *
+   * It uses the S3 client's own credential provider, so the answer is about
+   * the exact credentials the writes are signed with, not a fresh lookup of
+   * the environment that might resolve differently.
+   */
+  async callerIdentity({ timeoutMs = 5000 } = {}) {
+    if (!this.#isAws()) return null;
+    await this.#load();
+    let sts;
+    try {
+      sts = await import('@aws-sdk/client-sts');
+    } catch {
+      throw new Error('naming the caller needs @aws-sdk/client-sts');
+    }
+    const client = new sts.STSClient({
+      region: this.config.region,
+      credentials: this.#client.config.credentials,
+    });
+    try {
+      const out = await client.send(new sts.GetCallerIdentityCommand({}),
+        { abortSignal: AbortSignal.timeout(timeoutMs) });
+      return out.Arn ?? null;
+    } finally {
+      client.destroy();
+    }
+  }
+
+  #isAws() {
+    if (this.flavor !== 's3') return false;
+    if (!this.config.endpoint) return true;
+    try {
+      return /(^|\.)amazonaws\.com(\.cn)?$/.test(new URL(this.config.endpoint).hostname);
+    } catch {
+      return false;
+    }
+  }
+
   #key(key) { return this.prefix + key; }
   #strip(full) { return full.slice(this.prefix.length); }
 

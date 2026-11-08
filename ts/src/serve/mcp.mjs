@@ -98,7 +98,7 @@ export function mcpWriteTools() {
  * an answer to cross-site requests that a read-only one does not (§12.7).
  */
 export function mcpMethods(surface, principal, {
-  serverName = 'basalt', serverVersion = '1.0.0', writable = false, agent, account,
+  serverName = 'basalt', serverVersion = '1.0.0', writable = false, agent, account, caller,
 } = {}) {
   const vaultId = surface.vaultId;
   const findOp = (name) => OP_BY_NAME.get(name) ?? (writable ? WRITE_BY_NAME.get(name) : undefined);
@@ -111,7 +111,10 @@ export function mcpMethods(surface, principal, {
   let client;
 
   // The fourth argument is only for the writes: who is behind this principal.
-  const callOp = async (op, args) => op.call(surface, principal, args ?? {}, { agent, account, client });
+  // `caller` is what the store named for this process's credentials at
+  // startup (§12.7), looked up by whoever launched it, never by the client.
+  const callOp = async (op, args) =>
+    op.call(surface, principal, args ?? {}, { agent, account, caller, client });
 
   return {
     initialize: (params) => {

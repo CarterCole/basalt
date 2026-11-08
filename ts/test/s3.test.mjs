@@ -289,6 +289,29 @@ test('s3: a prefixed vault does not see a sibling vault in the same bucket', { s
     'a prefixed transport read outside its prefix');
 });
 
+test('s3: only AWS is asked who the credentials belong to (§12.7 caller)', async () => {
+  // No network and no SDK load: these answer null before either. A MinIO or
+  // R2 key must never be signed into a request to AWS STS.
+  const creds = { accessKeyId: 'minio', secretAccessKey: 'minio-secret' };
+  for (const opts of [
+    { flavor: 'minio', endpoint: 'http://127.0.0.1:9000' },
+    { flavor: 'r2', endpoint: 'https://acct.r2.cloudflarestorage.com' },
+    { flavor: 's3', endpoint: 'http://127.0.0.1:9000' },
+    { flavor: 's3', endpoint: 'https://s3.example.com' },
+    { flavor: 's3', endpoint: 'https://evilamazonaws.com' },
+  ]) {
+    const t = new S3Transport({ bucket: 'b', ...creds, ...opts });
+    assert.equal(await t.callerIdentity(), null, JSON.stringify(opts));
+  }
+});
+
+test('s3: on AWS the caller is the ARN STS reports for the S3 client\'s credentials', {
+  skip: process.env.BASALT_AWS_CALLER_BUCKET ? false : 'set BASALT_AWS_CALLER_BUCKET (and AWS_PROFILE) to ask STS',
+}, async () => {
+  const t = new S3Transport({ bucket: process.env.BASALT_AWS_CALLER_BUCKET, region: process.env.AWS_REGION });
+  assert.match(await t.callerIdentity(), /^arn:aws[a-z-]*:(iam|sts)::\d{12}:/);
+});
+
 test('s3: storing an image and a note is create-only and keeps the sidecar whole (§12.7)', { skip }, async () => {
   // The two writes that behave differently on an object store than on a disk:
   // the content put is conditional on the key being absent (If-None-Match),

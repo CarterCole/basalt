@@ -235,8 +235,9 @@ with `--writable` lists no such tool and answers `unknown tool`.
 The result is `{path, id, kind, media_type, size, content_hash, created,
 created_by, link}`; `created_by` is the record of who stored it (PROTOCOL
 §12.7): the principal, the `--agent` and `--account` labels the operator
-started the process with, the `clientInfo` the client sent in `initialize`,
-and the time. None of it is an argument of the tool, so a model cannot choose
+started the process with, on AWS the `caller` ARN that STS reported for the
+process's credentials at startup, the `clientInfo` the client sent in
+`initialize`, and the time. None of it is an argument of the tool, so a model cannot choose
 its own, and a `created_by` it writes into a note is replaced. `link` is a wikilink ready to paste into a note (`![[…]]` for an
 asset), spelled with the full path so it resolves even when the same filename
 exists elsewhere (PROTOCOL §9.2). The tool carries `readOnlyHint: false` and

@@ -81,8 +81,9 @@ export const WRITE_OPERATIONS = [
       'data. Give `text` for anything that is UTF-8 text, `base64` for binary. Never ' +
       'overwrites: a path that already exists is a conflict, so choose another. Needs ' +
       '`create_child` on the folder. Do not write a `basalt:` block: the id is assigned, ' +
-      'and the vault stamps which agent and account stored it (`created_by`), replacing ' +
-      'anything you put there. Returns the id and a `link` you can paste into a note.',
+      'and the vault stamps who stored it (`created_by`: the agent, the account and the ' +
+      'credentials behind them), replacing anything you put there. Returns the id and a ' +
+      '`link` you can paste into a note.',
     input: {
       type: 'object',
       properties: {
