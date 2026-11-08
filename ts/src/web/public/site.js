@@ -78,7 +78,7 @@
     const byId = new Map(idx.nodes.map((n) => [n.id, n]));
     const scores = new Map();
     for (const term of q.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []) {
-      for (const posting of idx.terms[term] ?? []) {
+      for (const posting of (Object.hasOwn(idx.terms, term) ? idx.terms[term] : [])) {
         scores.set(posting.node, (scores.get(posting.node) ?? 0) + posting.tf);
       }
     }

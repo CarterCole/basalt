@@ -360,7 +360,8 @@ export class Vault {
     const byId = new Map((this.indexes?.nodes?.entries ?? []).map((e) => [e.id, e]));
     const scores = new Map();
     for (const raw of query.toLowerCase().matchAll(/[\p{L}\p{N}_]+/gu)) {
-      for (const p of terms[raw[0]] ?? []) {
+      // hasOwn: a query for "constructor" must not find Object.prototype's.
+      for (const p of (Object.hasOwn(terms, raw[0]) ? terms[raw[0]] : [])) {
         const n = byId.get(p.node);
         if (!n) continue;
         if (!this.can(principalId, n.path, ['read']).allowed) continue;

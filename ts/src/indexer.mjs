@@ -363,7 +363,11 @@ export function extractDataLinks(text, path) {
 
 /** Build search postings, honoring the leak rule in §8.8. */
 export function buildSearchIndex({ nodes, vaultId, sourceDigest, isPublic }) {
-  const terms = {};
+  // A Map, not `{}`: a note containing the word "constructor" (or "__proto__",
+  // which the tokenizer also yields) would otherwise find an inherited
+  // Object.prototype member where it expects an unset slot, and `.push` on it
+  // throws, so one such word anywhere makes the whole vault unindexable.
+  const postings = new Map();
   for (const n of nodes) {
     if (!n.id || !n.text) continue;
     // §8.8: text is indexed only from nodes readable by `everyone`.
@@ -374,11 +378,16 @@ export function buildSearchIndex({ nodes, vaultId, sourceDigest, isPublic }) {
       if (t.length < 2 || STOPWORDS.has(t)) continue;
       counts.set(t, (counts.get(t) ?? 0) + 1);
     }
-    for (const [t, tf] of counts) (terms[t] ??= []).push({ node: n.id, tf });
+    for (const [t, tf] of counts) {
+      let list = postings.get(t);
+      if (!list) postings.set(t, (list = []));
+      list.push({ node: n.id, tf });
+    }
   }
-  for (const t of Object.keys(terms)) {
-    terms[t] = sortUtf8(terms[t], (p) => p.node);
-  }
+  // Object.fromEntries defines own data properties, so even a term named
+  // "__proto__" lands as a plain key rather than setting the prototype.
+  const terms = Object.fromEntries(
+    [...postings].map(([t, list]) => [t, sortUtf8(list, (p) => p.node)]));
   return envelope('search', vaultId, sourceDigest, {
     terms, stopwords: 'basalt-en-v1', stemmer: 'none',
   });
