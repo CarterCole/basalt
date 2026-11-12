@@ -9,8 +9,27 @@ import pytest
 
 from basalt import yamlio
 
-#: ``conformance/`` sits beside ``python/`` at the repository root.
-CONFORMANCE = Path(__file__).resolve().parents[2] / "conformance"
+def _find_conformance() -> Path:
+    """Locate the shared corpus, in either repository layout.
+
+    In the monorepo ``conformance/`` sits beside ``python/`` at the repository
+    root. In the per-language repository it is inside a git submodule at
+    ``spec/`` (a checkout of CarterCole/basalt pinned to the commit this
+    release was tested against). Walk up from the package and take the first
+    directory, or its ``spec/`` child, that has ``conformance/manifest.yaml``.
+    """
+    here = Path(__file__).resolve().parent
+    for directory in (here, *here.parents):
+        for candidate in (directory / "spec", directory):
+            if (candidate / "conformance" / "manifest.yaml").is_file():
+                return candidate / "conformance"
+    raise FileNotFoundError(
+        "the conformance corpus was not found: run `git submodule update --init` "
+        "in a per-language checkout, or run from the monorepo"
+    )
+
+
+CONFORMANCE = _find_conformance()
 
 
 def corpus(relative: str) -> Any:

@@ -326,61 +326,14 @@ fn first_h1(body: &str) -> Option<String> {
 /// Write a node id into a note's frontmatter, for the minting pass of §4.3.
 ///
 /// §13.4 requires comments to be preserved when an implementation edits YAML
-/// it did not author, and an implementation that cannot preserve them MUST
-/// refuse to rewrite the file. This one therefore does not reserialize the
-/// block: it splices `id:` into the existing `basalt:` mapping textually, or
-/// prepends a fresh two-line block, leaving every other byte of the author's
-/// YAML — comments, key order, quoting, blank lines — untouched.
+/// it did not author, so the block is spliced, not reserialized: see
+/// [`crate::yamltext::stamp_frontmatter`]. An `id` already in the block (one
+/// that is not a valid ULID, or the minting pass would not be here) is
+/// replaced rather than duplicated.
 pub fn with_id(text: &str, id: &str) -> Result<String, String> {
     let split = split_frontmatter(text);
-    let Some(raw) = split.raw else {
-        return Ok(format!("---\nbasalt:\n  id: {id}\n---\n{text}"));
-    };
-
-    let lines: Vec<&str> = raw.split('\n').collect();
-    let basalt_at = lines.iter().position(|l| {
-        let t = l.trim_end();
-        t == "basalt:" || t.starts_with("basalt:")
-    });
-
-    let mut out: Vec<String> = Vec::new();
-    match basalt_at {
-        None => {
-            out.push("basalt:".into());
-            out.push(format!("  id: {id}"));
-            out.extend(lines.iter().map(|s| s.to_string()));
-        }
-        Some(i) => {
-            let inline = lines[i].trim_end() != "basalt:";
-            if inline {
-                // `basalt: {…}` on one line. Rewriting a flow mapping safely
-                // would mean reserializing it, which §13.4 forbids when we
-                // cannot guarantee the author's layout survives.
-                return Err(format!(
-                    "cannot add an id without rewriting the flow mapping on line {}; \
-                     §13.4 forbids silently restyling a human's YAML",
-                    i + 1
-                ));
-            }
-            // Match the indentation of the mapping's existing first key, so the
-            // spliced line sits where the author's own keys sit.
-            let indent = lines[i + 1..]
-                .iter()
-                .find(|l| !l.trim().is_empty())
-                .and_then(|l| {
-                    let w = l.len() - l.trim_start().len();
-                    (w > 0).then(|| l[..w].to_string())
-                })
-                .unwrap_or_else(|| "  ".to_string());
-            out.extend(lines[..=i].iter().map(|s| s.to_string()));
-            out.push(format!("{indent}id: {id}"));
-            out.extend(lines[i + 1..].iter().map(|s| s.to_string()));
-        }
-    }
-
-    Ok(format!(
-        "---\n{}\n---\n{}",
-        out.join("\n").trim_end_matches('\n'),
-        split.body
-    ))
+    let raw = split.raw.as_deref();
+    let block = crate::yamltext::stamp_frontmatter(raw, id, None, None, false)?;
+    let body = if raw.is_some() { split.body.as_str() } else { text };
+    Ok(format!("---\n{block}\n---\n{body}"))
 }

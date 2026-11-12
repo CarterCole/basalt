@@ -11,6 +11,7 @@ pub mod ops;
 pub mod rest;
 pub mod router;
 pub mod surface;
+pub mod write;
 
 pub use router::{Router, SurfaceKind};
 pub use surface::{Delivery, Fault, Surface};

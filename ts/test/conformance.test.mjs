@@ -6,7 +6,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import {
   validateKey, isValidKey, findCollisions, findFolderCaseDivergence,
@@ -16,9 +15,10 @@ import { parseNote } from '../src/frontmatter.mjs';
 import {
   extractLinks, buildResolver, resolveTarget, anchorResolves, extractHeadings,
 } from '../src/links.mjs';
+import { corpusPath } from './support/spec.mjs';
 
 const corpus = (rel) => YAML.parse(readFileSync(
-  fileURLToPath(new URL(`../../conformance/${rel}`, import.meta.url)), 'utf8'));
+  corpusPath(rel), 'utf8'));
 
 // ------------------------------------------------------------ L0: keys
 

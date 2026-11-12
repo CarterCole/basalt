@@ -12,7 +12,6 @@ import { cp, rm, appendFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { Site } from '../src/web/site.mjs';
@@ -20,8 +19,9 @@ import { Gatekeeper } from '../src/gatekeeper.mjs';
 import { exportSite } from '../src/web/export.mjs';
 import { createRenderer } from '../src/web/markdown.mjs';
 import { buildResolver } from '../src/links.mjs';
+import { corpusPath } from './support/spec.mjs';
 
-const DEMO = fileURLToPath(new URL('../../conformance/vaults/demo/vault', import.meta.url));
+const DEMO = corpusPath('vaults/demo/vault');
 
 const render = (text) => createRenderer({
   resolver: buildResolver([]), canRead: () => true, byPath: new Map(), redactTitles: true,

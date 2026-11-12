@@ -1,0 +1,58 @@
+# Pushing a tag `vX.Y.Z` publishes basalt-vault X.Y.Z to crates.io.
+#
+# The tag has to match the crate's version, and the whole suite has to pass
+# against the conformance corpus pinned in the `spec` submodule, so a tag
+# records exactly which corpus the release was checked against.
+#
+# Authentication is keyless (crates.io Trusted Publishing, via OIDC) once the
+# crate has a trusted publisher configured for this repository and workflow.
+# Until then, a repository secret named CARGO_REGISTRY_TOKEN is used instead.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag matches the crate version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "basalt-vault") | .version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match basalt-vault $version in Cargo.toml"
+            exit 1
+          fi
+      - name: Tests, including the conformance corpus
+        run: cargo test --locked
+      - name: The package builds from what crates.io will serve
+        run: cargo publish --dry-run --locked -p basalt-vault
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # crates.io Trusted Publishing
+    env:
+      HAS_CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: env.HAS_CARGO_TOKEN != 'true'
+      - name: Publish
+        run: cargo publish --locked -p basalt-vault
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}

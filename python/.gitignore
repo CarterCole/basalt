@@ -1,3 +1,15 @@
-# Tool caches. The root .gitignore already covers __pycache__/ and .venv/.
+# Tool caches and build output; the per-language repository has no root
+# .gitignore to cover them.
+__pycache__/
 .pytest_cache/
 .ruff_cache/
+.venv/
+dist/
+.DS_Store
+*.tmp
+*.log
+
+# Local MCP client wiring and Claude Code's per-machine state: absolute paths
+# and profile names that mean nothing in another checkout.
+.mcp.json
+.claude/

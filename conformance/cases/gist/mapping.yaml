@@ -1,0 +1,61 @@
+# How a vault's files map onto a GitHub gist, for `basalt gist export`,
+# `basalt gist import` and the `--gist` store. This is tooling around the
+# protocol, not part of it: nothing here changes what a vault is, so no level
+# depends on it. An implementation that talks to gists runs this suite.
+#
+# A gist is a flat set of non-empty text files. A vault path is a tree, so a
+# path becomes one flat file name by percent-escaping exactly two characters:
+# "%" as "%25" and "/" as "%2F". Decoding reverses those two escapes in one
+# left-to-right pass and leaves every other "%" alone, so a gist written by
+# hand, with names that were never escaped, reads back as it looks.
+feature: gist
+spec: "tooling"
+cases:
+  # kind: name - `path` encodes to `name`, and `name` decodes back to `path`.
+  - {name: root-file, kind: name, path: "README.md", file: "README.md"}
+  - {name: nested, kind: name, path: "Notes/Ideas/A.md", file: "Notes%2FIdeas%2FA.md"}
+  - {name: vault-key, kind: name, path: "content/Notes/A.md", file: "content%2FNotes%2FA.md"}
+  - {name: percent, kind: name, path: "100% done.md", file: "100%25 done.md"}
+  - {name: percent-then-slash, kind: name, path: "a%/b", file: "a%25%2Fb"}
+  - {name: literal-escape-survives, kind: name, path: "a%2Fb.md", file: "a%252Fb.md"}
+  - {name: unicode-nfc, kind: name, path: "Notes/Café.md", file: "Notes%2FCafé.md"}
+  - {name: spaces, kind: name, path: "Field Notes/Start Here.md", file: "Field Notes%2FStart Here.md"}
+
+  # kind: decode - a file name that was not made by basalt. Only %2F and %25
+  # (either case of the hex digit) mean anything; the rest is literal.
+  - {name: decode-lowercase, kind: decode, file: "a%2fb", path: "a/b"}
+  - {name: decode-other-escape-literal, kind: decode, file: "a%41b", path: "a%41b"}
+  - {name: decode-lone-percent, kind: decode, file: "50%", path: "50%"}
+  - {name: decode-short-escape, kind: decode, file: "a%2", path: "a%2"}
+  - {name: decode-single-pass, kind: decode, file: "a%252Fb", path: "a%2Fb"}
+  - {name: decode-plain, kind: decode, file: "gistfile1.txt", path: "gistfile1.txt"}
+
+  # kind: id - what `basalt gist import` and `--update` accept for a gist. An
+  # id, or any URL that ends in one, as pasted from a browser or a clone line.
+  - {name: id-bare, kind: id, input: "aa5a315d61ae9438b18d", id: "aa5a315d61ae9438b18d"}
+  - {name: id-uppercase-folded, kind: id, input: "AA5A315D61AE9438B18D", id: "aa5a315d61ae9438b18d"}
+  - {name: id-numeric-old-style, kind: id, input: "1234567", id: "1234567"}
+  - {name: id-url, kind: id, input: "https://gist.github.com/octocat/aa5a315d61ae9438b18d", id: "aa5a315d61ae9438b18d"}
+  - {name: id-url-no-user, kind: id, input: "https://gist.github.com/aa5a315d61ae9438b18d", id: "aa5a315d61ae9438b18d"}
+  - {name: id-url-trailing-slash, kind: id, input: "https://gist.github.com/octocat/aa5a315d61ae9438b18d/", id: "aa5a315d61ae9438b18d"}
+  - {name: id-url-fragment, kind: id, input: "https://gist.github.com/octocat/aa5a315d61ae9438b18d#file-notes-md", id: "aa5a315d61ae9438b18d"}
+  - {name: id-https-clone, kind: id, input: "https://gist.github.com/aa5a315d61ae9438b18d.git", id: "aa5a315d61ae9438b18d"}
+  - {name: id-ssh-clone, kind: id, input: "git@gist.github.com:aa5a315d61ae9438b18d.git", id: "aa5a315d61ae9438b18d"}
+  - {name: id-surrounding-space, kind: id, input: "  aa5a315d61ae9438b18d \n", id: "aa5a315d61ae9438b18d"}
+  - {name: id-not-hex, kind: id, input: "my-notes", id: null}
+  - {name: id-path-traversal, kind: id, input: "../aa5a315d61ae9438b18d/x", id: null}
+  - {name: id-empty, kind: id, input: "", id: null}
+  - {name: id-raw-url-is-not-a-gist-url, kind: id, input: "https://gist.githubusercontent.com/octocat/aa5a315d61ae9438b18d/raw/abc/notes.md", id: null}
+
+  # kind: eligible - whether a file may be sent. A gist holds non-empty text:
+  # the API carries content as a JSON string, so bytes that are not UTF-8 (or
+  # that hold a NUL) cannot make the trip, and GitHub rejects an empty file.
+  # `reason` is what an export reports for a file it leaves out.
+  - {name: eligible-text, kind: eligible, text: "# Hello\n", ok: true}
+  - {name: eligible-frontmatter-only, kind: eligible, text: "---\ntitle: T\n---\n", ok: true}
+  - {name: eligible-unicode, kind: eligible, text: "Café ☕ 漢字\n", ok: true}
+  - {name: eligible-zero-bytes, kind: eligible, text: "", ok: false, reason: empty}
+  - {name: eligible-blank, kind: eligible, text: " \n\t\n", ok: false, reason: empty}
+  - {name: eligible-nul, kind: eligible, base64: "YQBi", ok: false, reason: not_text}
+  - {name: eligible-invalid-utf8, kind: eligible, base64: "wyg=", ok: false, reason: not_text}
+  - {name: eligible-png-header, kind: eligible, base64: "iVBORw0KGgoAAAANSUhEUg==", ok: false, reason: not_text}

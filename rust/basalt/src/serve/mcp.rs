@@ -10,7 +10,10 @@
 use super::jsonrpc::{Methods, RpcError, INVALID_PARAMS};
 use super::ops::{self, OPERATIONS};
 use super::surface::{base64, RawBody, Surface};
+use super::write;
 use crate::canonical::Json;
+use crate::store::{Client, Provenance};
+use std::sync::{Arc, Mutex};
 
 /// Versions this server speaks, newest first (INTEROP §4.2.1).
 pub const MCP_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -31,6 +34,39 @@ Start with basalt_tree or basalt_search to find paths, then basalt_node to read
 one. basalt_links gives the graph around a node; an edge whose target reads
 \"redacted\" points at a node this principal may not see, and is kept rather than
 dropped so the graph stays honest.";
+
+// Said only when the operator turned writes on, so a read-only server does
+// not advertise a tool it does not have.
+const WRITE_INSTRUCTIONS: &str = "
+
+This connection can also add to the vault. basalt_store creates a NEW note,
+image or other file and never replaces one: if the path is taken, choose
+another. Writes are checked against the same access control list as reads
+(create_child on the folder), and a refusal comes back as a tool error. Search
+first, so a note is linked to what is already there rather than duplicated.";
+
+/// What the operator allowed this connection to do, and who is behind it.
+#[derive(Debug, Clone, Default)]
+pub struct McpOptions {
+    /// Offer `basalt_store` (§12.7). The HTTP transport never sets it: a write
+    /// endpoint a browser can reach needs an answer to cross-site requests
+    /// that a read-only one does not.
+    pub writable: bool,
+    pub agent: Option<String>,
+    pub account: Option<String>,
+    /// What the store named for this process's credentials at startup.
+    pub caller: Option<String>,
+}
+
+/// The write tools, offered only to a writable server.
+pub fn write_tools() -> Vec<Json> {
+    vec![Json::obj()
+        .set("name", Json::str(format!("{TOOL_PREFIX}store")))
+        .set("description", Json::str(write::STORE_SUMMARY))
+        .set("inputSchema", write::store_input_schema())
+        .set("annotations", write::store_annotations())
+        .build()]
+}
 
 /// The MCP tool list, projected from the shared operation table.
 pub fn tools() -> Json {
@@ -120,8 +156,30 @@ pub fn methods<'a>(
     principal: &'a str,
     server_version: &'a str,
 ) -> Methods<'a> {
+    methods_with(surface, principal, server_version, McpOptions::default())
+}
+
+/// [`methods`], with writes when the operator asked for them.
+pub fn methods_with<'a>(
+    surface: &'a Surface,
+    principal: &'a str,
+    server_version: &'a str,
+    opts: McpOptions,
+) -> Methods<'a> {
+    let writable = opts.writable;
+    // What the connecting program says it is, from `initialize`. One table
+    // serves one stdio connection, so holding it here is safe.
+    let client: Arc<Mutex<Option<Client>>> = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&client);
     Methods::new()
         .on("initialize", move |params| {
+            let client = &seen;
+            if let Some(info) = params.get("clientInfo") {
+                *client.lock().expect("client lock") = Some(Client {
+                    name: info.get("name").and_then(|n| n.as_str()).map(str::to_string),
+                    version: info.get("version").and_then(|n| n.as_str()).map(str::to_string),
+                });
+            }
             let asked = params.get("protocolVersion").and_then(|v| v.as_str());
             // §4.2.1: echo a version we both speak, else answer with ours and
             // let the client decide. Silently pretending to speak the client's
@@ -162,18 +220,64 @@ pub fn methods<'a>(
                         .set("title", Json::str(format!("Basalt vault {title}")))
                         .build(),
                 )
-                .set("instructions", Json::str(INSTRUCTIONS))
+                .set(
+                    "instructions",
+                    Json::str(if writable {
+                        format!("{INSTRUCTIONS}{WRITE_INSTRUCTIONS}")
+                    } else {
+                        INSTRUCTIONS.to_string()
+                    }),
+                )
                 .build())
         })
         .on("notifications/initialized", |_| Ok(Json::obj().build()))
         .on("notifications/cancelled", |_| Ok(Json::obj().build()))
         .on("ping", |_| Ok(Json::obj().build()))
-        .on("tools/list", |_| {
-            Ok(Json::obj().set("tools", tools()).build())
+        .on("tools/list", move |_| {
+            let mut all: Vec<Json> = tools().as_array().map(<[Json]>::to_vec).unwrap_or_default();
+            if writable {
+                all.extend(write_tools());
+            }
+            Ok(Json::obj().set("tools", Json::arr(all)).build())
         })
         .on("tools/call", move |params| {
             let raw = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let name = raw.strip_prefix(TOOL_PREFIX).unwrap_or(raw);
+            if writable && name == "store" {
+                let args = params.get("arguments").cloned().unwrap_or(Json::obj().build());
+                let who = Provenance {
+                    agent: opts.agent.clone(),
+                    account: opts.account.clone(),
+                    caller: opts.caller.clone(),
+                    client: client.lock().expect("client lock").clone(),
+                };
+                let text_result = |text: String, is_error: bool| {
+                    let mut o = Json::obj().set(
+                        "content",
+                        Json::arr([Json::obj()
+                            .set("type", Json::str("text"))
+                            .set("text", Json::str(text))
+                            .build()]),
+                    );
+                    if is_error {
+                        o = o.set("isError", Json::Bool(true));
+                    }
+                    o.build()
+                };
+                return Ok(match write::store_through(surface, principal, &args, &who) {
+                    Ok(data) => text_result(data.to_canonical_string(), false),
+                    // A refusal says why, so the model can choose another path.
+                    Err(e) => {
+                        let mut err = Json::obj()
+                            .set("error", Json::str(e.code))
+                            .set("status", Json::Int(e.status as i64));
+                        if !e.detail.is_empty() {
+                            err = err.set("detail", Json::str(&e.detail));
+                        }
+                        text_result(err.build().to_canonical_string(), true)
+                    }
+                });
+            }
             let Some(op) = ops::by_name(name) else {
                 return Err(RpcError::new(
                     INVALID_PARAMS,

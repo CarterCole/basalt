@@ -1,210 +1,170 @@
 # Releasing Basalt to crates.io, PyPI and npm
 
-Status: **prepared, nothing published.** Renames, metadata, the corpus
-packages and the dependency wiring are done and dry-run. The irreversible
-step — uploading — has not been taken, and needs credentials this machine
-does not have (npm is logged out; there is no PyPI configuration).
+Status: **prepared, nothing published.** Each registry gets one package,
+`basalt-vault`, holding the library, the `basalt` command and (in Rust and
+TypeScript) the MCP server. Each package has its own repository, and pushing a
+`vX.Y.Z` tag to that repository publishes that version. The repositories exist
+and are empty; the release commit, the split and the first tags have not
+happened.
 
-Verified rather than assumed:
+Verified rather than assumed, from a copy of each package laid out as its own
+repository (package at the root, the spec in `spec/`):
 
 | Check | Result |
 |---|---|
-| `cargo package --list` on the corpus crate | **0 → 46** fixture files |
-| `npm pack --dry-run` on the corpus package | 46 fixture files, 24.7 kB |
-| Wheel built from `packaging/pypi` | 46 fixture files |
-| `cargo publish --dry-run` — corpus | passes |
-| `cargo publish --dry-run` — `basalt-vault` | **fails, by design**: `no matching package named basalt-conformance found`. Cargo will not publish a crate whose dev-dependency cannot be resolved from the registry, which enforces the release order in §6 rather than leaving it to discipline. |
-| Rust / TypeScript / Python suites | 77 / 146 / 216 passing |
-| Rust reads the corpus via the package | yes — `basalt_conformance::corpus_dir()` |
+| `cargo publish --dry-run -p basalt-vault` | passes; 36 files in a git checkout: library, `basalt` binary, README, LICENSE; no tests |
+| `npm publish --dry-run` in `ts/` | `basalt-vault-1.0.0.tgz`, 44 files, 1.7 MB, with its own README and LICENSE |
+| `uv build` + `twine check` in `python/` | both pass; wheel has LICENSE and `py.typed`, sdist leaves out tests, `spec/` and the workflow |
+| Rust / TypeScript / Python suites | 134 / 348 (12 skipped) / 376 passing |
+| The §12.7 store cases | all pass in all three |
+| The three `release.yml` workflows | pass `actionlint`; every command in them was run locally. They have **not** run on GitHub yet: the first tag is their first real run |
 
-The whole shape of this release is set by one structural fact:
+## 1. Shape: one package and one repository per language
 
-> The conformance corpus lives at `conformance/`, which is **outside every
-> package directory**. `cargo package --list` currently ships **zero**
-> conformance files, and the same is true of a Python sdist built from
-> `python/` or a tarball from `ts/`.
+| Registry | Package | Repository | Holds |
+|---|---|---|---|
+| crates.io | `basalt-vault` | [`CarterCole/rust-basalt`](https://github.com/CarterCole/rust-basalt) | the `basalt` library and the `basalt` binary (CLI, self-check, `serve`, `mcp`) |
+| PyPI | `basalt-vault` | [`CarterCole/python-basalt`](https://github.com/CarterCole/python-basalt) | the library and the `basalt` entry point |
+| npm | `basalt-vault` | [`CarterCole/ts-basalt`](https://github.com/CarterCole/ts-basalt) | the library, the `basalt` bin and the MCP server |
 
-So a published artifact cannot see the fixtures its own tests read. Everything
-below follows from fixing that.
+[`CarterCole/basalt`](https://github.com/CarterCole/basalt) stays the home of
+the spec (`protocol/`) and the conformance corpus (`conformance/`).
 
----
+`basalt` is taken on all three registries and `basalt-protocol` on two, so
+the package is `basalt-vault` everywhere. In Rust the import name stays
+`basalt` (`[lib] name = "basalt"`), and the binary is `basalt` in all three.
 
-## 1. Blockers found
+An earlier plan shipped the conformance corpus as a fourth package
+(`basalt-conformance`) and split the Rust CLI into `basalt-vault-cli`. Both
+are gone:
 
-| Problem | Detail |
-|---|---|
-| `basalt` is taken | **All three registries.** Not available anywhere. |
-| `basalt-protocol` is taken | PyPI **and** crates.io. Free on npm only. |
-| Current Python name is unpublishable | `pyproject.toml` declares `basalt-protocol` — taken. |
-| Current Rust name is unpublishable | `rust/basalt/Cargo.toml` declares `basalt` — taken. |
-| npm name needs an org | `@basalt/reference` requires the `basalt` scope, which does not exist yet. |
-| Versions disagree | ts `0.1.0`, python `0.1.0`, rust `1.0.0`. |
-| Metadata missing | No `repository` on any package; ts has no `files`/`exports`/`author`; python has no `license`/`classifiers`/`urls`. |
+- **The corpus is not published.** It lives once, in `CarterCole/basalt`.
+  Each language repository carries it as a git submodule at `spec/`, pinned to
+  a commit, so a tag records exactly which corpus the release passed. The
+  published packages leave their tests and `spec/` out (`exclude = ["tests/"]`
+  in Rust, `files` in npm, the wheel's package list and the sdist `exclude` in
+  Python), so nobody downloads a test suite that cannot find its fixtures.
+- **The CLI is in the library crate.** `cargo install basalt-vault` gets the
+  `basalt` binary; `cargo add basalt-vault` gets the library. Both come from
+  one crate.
 
-The GitHub repo can stay `CarterCole/basalt` — registry collisions do not
-affect it.
+Each tests directory finds the corpus by walking up from the package until a
+directory, or its `spec/` child, holds `conformance/manifest.yaml`
+(`ts/test/support/spec.mjs`, `rust/basalt/tests/support/mod.rs`,
+`python/tests/conftest.py`). The same tests therefore run in the monorepo,
+where that is the repository root, and in a language repository, where it is
+`spec/`.
 
-## 2. Naming — decided
+Each package directory (`ts/`, `python/`, `rust/`, `rust/basalt/`) holds a
+copy of the root `LICENSE`, because a registry packs only what is inside the
+package. The crate's page is `rust/README.md`; npm and PyPI have their own.
+Links to the spec and the corpus are absolute URLs into `CarterCole/basalt`,
+since no registry resolves a link that points outside the package.
 
-`basalt-vault` is the **only candidate free on all three registries**, and
-`basalt-conformance` is likewise free on all three. Taking one name everywhere
-is worth more than a marginally better name per registry: it is the string
-people search, and a split identity across registries is a permanent tax.
+`ts/bin/basalt.mjs schema proto` prints `protocol/basalt.proto`, which is part
+of the spec and not of the npm package. It works from the monorepo and from a
+language repository with `spec/` checked out; from an installed package it
+prints where to find the file.
 
-| Registry | Package | Purpose |
-|---|---|---|
-| crates.io | `basalt-vault` | library |
-| crates.io | `basalt-vault-cli` | the `basalt` binary |
-| PyPI | `basalt-vault` | library + `basalt` entry point |
-| npm | `basalt-vault` | library + `basalt` bin |
-| all three | `basalt-conformance` | the corpus, shipped as data |
+## 2. What the three implementations agree on
 
-Unscoped on npm rather than `@basalt/reference`: it matches the other two, and
-avoids depending on an org that does not exist.
+Every implementation runs the whole corpus at L0–L4. All three also create
+objects (§12.7) and run `conformance/cases/store/creation.yaml`, so the
+write path agrees by test rather than by intent: path rules, collisions,
+ACL checks, identity at birth, and the `created_by` stamp, including the
+email hashing in `caller`. All three keep a vault in git (`--git DIR
+--remote NAME`), with the same lock file and commit trailers, so they can
+share one clone. All three also move folders to and from GitHub gists
+(`gist export`, `gist import`, `--gist ID`) and run
+`conformance/cases/gist/mapping.yaml`, so a gist one of them writes the
+others read. That suite is tooling, not protocol, so it has no level.
 
-**Claim all five names on all three registries before anything else.** They are
-free today and cost nothing; a squatter on `basalt-conformance` after the spec
-gets attention would be genuinely painful.
+What still differs, on purpose:
 
-The manifests now declare these names, at version `1.0.0`. The Rust package is
-`basalt-vault` while the *library* is still `basalt` (`[lib] name = "basalt"`),
-so every `use basalt::` path in the codebase is untouched by a rename forced
-on us by a registry collision.
+| | TypeScript | Rust | Python |
+|---|---|---|---|
+| Interop profiles | all | `P-REST`, `P-MCP`, `P-INTEROP` | none |
+| `basalt mcp --writable` | yes | yes | no MCP server |
+| Publish site, static export | yes | export only | no |
+| S3 | optional dependency | `--features s3` | `s3` extra |
+| GitHub gists | built in (Node's `fetch`) | `gist` feature, on by default | built in (standard library) |
+| Topic search | no | no | `topics` extra |
 
-## 3. The corpus package — the crux
+## 3. Release order
 
-`conformance/` becomes a publishable package on each registry, and each
-implementation takes it as a **dev-dependency** rather than reaching up the
-tree with `../../`.
+Once, to set up:
 
-This resolves both objections raised against the alternatives:
+1. Commit everything in this repository, so the split starts from a commit,
+   and push it, so the corpus commit the submodules pin exists on GitHub.
+2. For each of `rust` → `rust-basalt`, `python` → `python-basalt`,
+   `ts` → `ts-basalt`, carve the directory out with its history and push it:
+   `git subtree split --prefix=<dir> -b split/<dir>`, then push that branch to
+   the new repository's `main`.
+3. In each new repository, add the spec and commit:
+   `git submodule add https://github.com/CarterCole/basalt.git spec`, with
+   `shallow = true` set for it in `.gitmodules`.
+4. Set up publishing credentials for each registry (below).
 
-- It is reachable from a published artifact, which a sibling path is not.
-- It is **versioned**, so skew is a reviewable number. "Corpus 1.0.2 → 1.0.3,
-  three expectations changed" is a diff someone approves, which was the real
-  argument for submodules — delivered without submodule mechanics.
+Then, for every release of a package:
 
-### Keeping one source of truth
+1. Bump the version in the manifest (`rust/Cargo.toml`'s
+   `[workspace.package]`, `ts/package.json`, `python/pyproject.toml`) and
+   commit.
+2. Tag `vX.Y.Z` on that commit and push the tag. The workflow checks the tag
+   against the manifest, runs the suite, dry-runs the package, and publishes.
+3. To move the corpus a package is tested against, advance the submodule
+   (`git -C spec fetch && git -C spec checkout <commit>`) and commit it before
+   tagging.
 
-The corpus stays at `conformance/` in this repo. Three thin wrappers ship it:
-
-```
-conformance/              ← the single source: YAML cases + vault fixtures
-packaging/
-  crates/                 ← basalt-conformance crate, embeds assets/
-  pypi/                   ← basalt-conformance wheel, package_data
-  npm/                    ← basalt-conformance package, files[]
-```
-
-Each wrapper is near-empty: a manifest plus one accessor that returns the
-corpus root (or embedded bytes). A release script copies `conformance/` into
-each wrapper immediately before publishing, so the duplication exists for
-seconds inside a build and never in git.
-
-Each wrapper exposes one thing:
-
-| Language | Accessor |
-|---|---|
-| Rust | `basalt_conformance::corpus_dir() -> &'static Path` (or `include_dir!`) |
-| Python | `basalt_conformance.corpus_dir() -> pathlib.Path` |
-| Node | `corpusDir(): string` |
-
-### Dependency wiring, per language
-
-**Rust** has first-class support for exactly this case:
-
-```toml
-[dev-dependencies]
-basalt-conformance = { path = "../../packaging/crates", version = "1.0" }
-```
-
-Cargo uses the **path** locally — so a fixture fix still breaks Rust's tests
-the same minute it breaks TypeScript's — and strips it on publish, pinning
-registry **1.0** for consumers. Monorepo speed during development, explicit
-pinning for everyone else.
-
-**npm** does the same via workspaces: `"basalt-conformance": "^1.0.0"`
-resolves to the local workspace package during development.
-
-**Python is the weak one.** pip has no path/version duality. Options:
-- a `[tool.uv.sources]` entry (dev) plus a normal version constraint (publish),
-  which works but is uv-specific; or
-- an optional `conformance` extra that pulls the released package, with the
-  repo's own test run using an editable install.
-
-This asymmetry is worth accepting rather than contorting the other two to
-match the weakest packaging system.
+The three packages are independent: none depends on another, and each is
+versioned by its own tags. The first release of each is `v1.0.0`.
 
 ## 4. Version policy
-
-Proposed, and the main thing to disagree with:
 
 - **Spec version and package version are different numbers.** The spec is
   `basalt: 1` (§16) and changes only on a breaking spec change. Package
   versions are ordinary semver per implementation.
-- Every package declares which spec major it implements, in metadata
-  (`keywords` / `classifiers`) and in code.
-- **All four implementations start at `1.0.0`**, not `0.1.0`: they pass the
-  full corpus at L0–L4, and `0.x` would signal less confidence than the
-  byte-exact cross-implementation agreement actually warrants.
-- `basalt-conformance` versions independently and **more often**, because a
-  fixture fix is a corpus release. Its major tracks the spec major.
+- All three start at `1.0.0`: they pass the full corpus at L0–L4 and agree
+  byte for byte. The open question is whether the Rust and Python *APIs*
+  are ready for that promise (see §6).
 
-## 5. Metadata to add before publishing
+## 5. Automation
 
-Common to all: `repository`, `homepage`, `license = MIT`, `keywords`,
-`description`, `README`.
+Each language repository has `.github/workflows/release.yml` (kept in this
+repository at `<dir>/.github/workflows/release.yml`, so the split carries it
+along). It runs on a `v*` tag and publishes only if the tag matches the
+manifest and every test, including the whole conformance corpus, passes. That
+agreement is the product.
 
-- **ts/package.json** — add `repository`, `author`, `files` (ship `src/` and
-  `bin/`, exclude `test/`), `exports`, `engines` is present. Rename to
-  `basalt-vault`.
-- **python/pyproject.toml** — add `license`, `authors`, `classifiers`
-  (Python versions, MIT, Topic :: Text Processing), `[project.urls]`. Rename
-  to `basalt-vault`.
-- **rust** — add `repository`, `keywords`, `categories`, `readme` to both
-  crates; set `rust-version`. Rename `basalt` → `basalt-vault` and
-  `basalt-cli` → `basalt-vault-cli`, keeping the **binary** named `basalt`.
+| Registry | Keyless (preferred) | Fallback |
+|---|---|---|
+| crates.io | Trusted Publishing, through `rust-lang/crates-io-auth-action` | secret `CARGO_REGISTRY_TOKEN` |
+| PyPI | a Trusted Publisher for the repository, workflow `release.yml`, environment `pypi` | secret `PYPI_API_TOKEN` |
+| npm | a Trusted Publisher for the repository and workflow (needs npm 11.5.1+), with `--provenance` | secret `NPM_TOKEN` |
 
-Each package keeps its own README: the registry page is the first thing a
-reader sees, and the root README is written for the repo.
+Setting these up happens on each registry's website and in each repository's
+secrets, so it is done by hand. As far as I know, crates.io and npm want the
+package to exist before a Trusted Publisher can be attached, so the first
+release of those two may need the token fallback; PyPI accepts a pending
+publisher for a package that does not exist yet. A tag with a prerelease part
+(`v1.1.0-rc.1`) goes to npm under the `next` dist-tag, so it never becomes
+what `npm install basalt-vault` fetches.
 
-## 6. Release order
+## 6. Open questions
 
-The corpus must exist on a registry before anything can depend on it.
-
-1. `basalt-conformance` → crates.io, PyPI, npm.
-2. Repoint all three implementations to depend on it; verify every suite
-   still passes locally **and** against the published corpus.
-3. `basalt-vault` → crates.io, PyPI, npm; then `basalt-vault-cli`.
-4. Tag `v1.0.0`, with the spec at `basalt: 1`.
-
-Dry-run everything first: `cargo publish --dry-run`, `twine check`,
-`npm publish --dry-run`. For Rust, confirm `cargo package --list` now
-**includes** the corpus assets — that number going from 0 to non-zero is the
-check that this whole plan worked.
-
-## 7. Automation
-
-Use each registry's keyless publishing rather than long-lived tokens in
-secrets:
-
-- **PyPI** — Trusted Publishers (OIDC from GitHub Actions).
-- **npm** — provenance via `npm publish --provenance` with OIDC.
-- **crates.io** — Trusted Publishing.
-
-A tag-triggered workflow that runs all three suites, then publishes in the
-order above, with the corpus first. It must refuse to publish if any
-implementation's byte-exact comparison fails: that property is the product.
-
-## 8. Open questions
-
-1. **Name**: `basalt-vault` everywhere — agreed? It is the only one free on
-   all three.
-2. **Start at 1.0.0 or 0.x?** Semver-wise `1.0.0` commits you to the public
-   API; the protocol is stable but the Rust/Python APIs have existed for a day.
-3. **Does the CLI ship on all three registries**, or pick one home (crates.io
-   gives the best single-binary install) and leave the others library-only?
-4. **Python corpus wiring**: uv-specific sources, or an extra?
-5. **MCP server** — deferred earlier until the core worked. The core works
-   now; it would be a fourth package, and the name should be claimed with the
-   rest if it is coming.
+1. **1.0.0 or 0.x?** Semver-wise, `1.0.0` commits to the public API; the
+   protocol is stable, but the Rust and Python APIs are young.
+2. **Default S3 in the Rust binary?** `cargo install basalt-vault` reads
+   folders and git; a bucket needs `--features s3`. Defaulting it on would
+   pull the AWS SDK into every library user's build.
+3. **An MCP server for Python**, to close the last gap in the table above.
+4. **`gist` on by default in the Rust crate?** It is, so the installed binary
+   works out of the box (a native client: `ureq` and rustls, 17 extra crates
+   on Unix and `ring`, which needs a C compiler to build). A library user
+   opts out with `default-features = false`. Making it opt-in like `s3` would
+   keep the library lean and cost `cargo install` users a flag.
+5. **What stays in `CarterCole/basalt`.** It still holds `rust/`, `ts/` and
+   `python/`, and the demo site's workflow builds from `ts/`. Once the
+   language repositories are the source of truth, those directories should
+   leave the monorepo, and the site should install `basalt-vault` from npm or
+   check out `ts-basalt`. Until then the same code lives in two places.

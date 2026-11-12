@@ -1,0 +1,69 @@
+# Pushing a tag `vX.Y.Z` publishes basalt-vault X.Y.Z to npm, with provenance.
+#
+# The tag has to match the version in package.json, and the whole suite has to
+# pass against the conformance corpus pinned in the `spec` submodule, so a tag
+# records exactly which corpus the release was checked against. A tag with a
+# prerelease part (v1.1.0-rc.1) goes out under the `next` dist-tag, so it never
+# becomes what `npm install basalt-vault` fetches.
+#
+# Authentication is keyless (an npm Trusted Publisher for this repository and
+# workflow `release.yml`; it needs npm 11.5.1 or later). A repository secret
+# named NPM_TOKEN is used instead if one is set.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Tag matches the package version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in package.json"
+            exit 1
+          fi
+      - run: npm ci
+      - name: Tests, including the conformance corpus
+        run: npm test
+      - name: The tarball holds what it should
+        run: npm publish --dry-run
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing and provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: A recent npm, for Trusted Publishing
+        run: npm install -g npm@^11.5.1
+      - run: npm ci
+      - name: Publish
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) tag=next ;;
+            *)   tag=latest ;;
+          esac
+          npm publish --provenance --access public --tag "$tag"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

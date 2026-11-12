@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import re
 from typing import Any
 
 from ..keys import validate_key
@@ -89,7 +90,7 @@ class S3Transport(Transport):
         except ImportError as err:  # pragma: no cover - import-time only
             raise RuntimeError(
                 "S3Transport needs boto3. Install it (pip install "
-                "'basalt-protocol[s3]'), or use LocalTransport for a local vault."
+                "'basalt-vault[s3]'), or use LocalTransport for a local vault."
             ) from err
 
         cfg: dict[str, Any] = {"signature_version": "s3v4"}
@@ -118,6 +119,42 @@ class S3Transport(Transport):
 
         self._client = boto3.client("s3", **kwargs)
         return self._client
+
+    def _is_aws(self) -> bool:
+        """AWS S3 itself: the s3 flavor, at AWS's own endpoint."""
+        if self.flavor != "s3":
+            return False
+        if not self.endpoint:
+            return True
+        from urllib.parse import urlparse
+
+        host = urlparse(self.endpoint).hostname or ""
+        return bool(re.search(r"(^|\.)amazonaws\.com(\.cn)?$", host))
+
+    def caller_identity(self) -> str | None:
+        """The ARN AWS reports for these credentials (§12.7 ``caller``).
+
+        STS GetCallerIdentity needs no IAM permission, so a narrowly scoped
+        writer can still ask. MinIO and R2 have no equivalent, and another
+        store's keys are never sent to AWS to find out.
+        """
+        if not self._is_aws():
+            return None
+        client = self._load()
+        import boto3
+        from botocore.config import Config
+
+        session = boto3.session.Session()
+        creds = client._request_signer._credentials  # the exact credentials writes are signed with
+        sts = session.client(
+            "sts",
+            region_name=self.region,
+            aws_access_key_id=creds.access_key,
+            aws_secret_access_key=creds.secret_key,
+            aws_session_token=creds.token,
+            config=Config(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1}),
+        )
+        return sts.get_caller_identity().get("Arn")
 
     def _full(self, key: str) -> str:
         return self.prefix + key

@@ -7,12 +7,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
+import { corpusPath } from './support/spec.mjs';
 
-const ROOT = fileURLToPath(new URL('../../conformance/vaults/minimal/', import.meta.url));
+const ROOT = corpusPath('vaults/minimal/');
 const KINDS = ['nodes', 'links', 'backlinks', 'tags', 'search', 'digest', 'integrity'];
 
 test('expected: a rebuild reproduces every stored index byte for byte', async () => {

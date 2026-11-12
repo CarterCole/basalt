@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/CarterCole/basalt"
-Repository = "https://github.com/CarterCole/basalt"
-Issues = "https://github.com/CarterCole/basalt/issues"
+Homepage = "https://github.com/CarterCole/python-basalt"
+Repository = "https://github.com/CarterCole/python-basalt"
+Issues = "https://github.com/CarterCole/python-basalt/issues"
 Specification = "https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md"
 
 [project.scripts]
@@ -61,6 +61,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/basalt"]
+
+# The tests read the conformance corpus from the spec checkout (../conformance
+# in the monorepo, the `spec/` submodule in the per-language repository), which
+# an sdist does not carry, so an sdist that included them would ship a suite
+# that cannot find its fixtures. Conformance is checked from the checkout,
+# before release. The submodule and the release workflow stay out for the same
+# reason.
+[tool.hatch.build.targets.sdist]
+exclude = ["tests/", "uv.lock", ".github/", ".gitmodules", "spec/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

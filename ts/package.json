@@ -11,18 +11,19 @@
     "s3",
     "minio",
     "r2",
+    "git",
+    "gist",
     "acl",
     "publish",
     "vault"
   ],
-  "homepage": "https://github.com/CarterCole/basalt#readme",
+  "homepage": "https://github.com/CarterCole/ts-basalt#readme",
   "bugs": {
-    "url": "https://github.com/CarterCole/basalt/issues"
+    "url": "https://github.com/CarterCole/ts-basalt/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CarterCole/basalt.git",
-    "directory": "ts"
+    "url": "git+https://github.com/CarterCole/ts-basalt.git"
   },
   "license": "MIT",
   "author": "Carter Cole",
@@ -33,6 +34,9 @@
     "./transport/fs": "./src/transport/fs.mjs",
     "./transport/s3": "./src/transport/s3.mjs",
     "./transport/memory": "./src/transport/memory.mjs",
+    "./transport/git": "./src/transport/git.mjs",
+    "./transport/gist": "./src/transport/gist.mjs",
+    "./gist": "./src/gist.mjs",
     "./store": "./src/store.mjs",
     "./gatekeeper": "./src/gatekeeper.mjs",
     "./site": "./src/web/site.mjs",

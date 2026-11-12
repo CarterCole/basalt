@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+*.tmp
+*.log
+
+# Local MCP client wiring and Claude Code's per-machine state: absolute paths
+# and profile names that mean nothing in another checkout.
+.mcp.json
+.claude/

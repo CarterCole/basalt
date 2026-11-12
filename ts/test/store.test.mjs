@@ -22,11 +22,11 @@ import { mcpMethods } from '../src/serve/mcp.mjs';
 import { storeObject, normalizeCaller, MAX_STORE_BYTES } from '../src/store.mjs';
 import YAML from 'yaml';
 import { canonicalJson } from '../src/canonical.mjs';
+import { corpusPath } from './support/spec.mjs';
 
 const run = promisify(execFile);
 
-const FIXTURE = fileURLToPath(
-  new URL('../../conformance/vaults/minimal/vault', import.meta.url));
+const FIXTURE = corpusPath('vaults/minimal/vault');
 const CLI = fileURLToPath(new URL('../bin/basalt.mjs', import.meta.url));
 
 /** A scratch copy of the fixture, opened and indexed. */

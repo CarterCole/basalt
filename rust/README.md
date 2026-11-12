@@ -10,7 +10,7 @@ spec rather than against its author's memory.
 
 ```
 rust/
-  basalt/            the library: the protocol, with no cloud dependency
+  basalt/            the basalt-vault crate: the library and the `basalt` binary
     src/
       order.rs       §13.3   NFC + UTF-8 bytewise ordering, the one comparator
       keys.rs        §1.1 §2 key validation, path algebra, collision rules
@@ -23,9 +23,12 @@ rust/
       manifest.rs    §3.1    the manifest and the version gate
       vault.rs       §3      loading, scanning, reading, export
       gatekeeper.rs  §12     the HTTP read surface
-      transport/     §1      the five operations: memory, filesystem, S3
+      store.rs       §12.7   creating objects: notes, images, any file
+      yamltext.rs    §13.4   comment-preserving edits to YAML a human wrote
+      gist.rs        (none)  `basalt gist export` and `import`: folders to and from a GitHub gist
+      transport/     §1      the five operations: memory, filesystem, git, gist, S3
+      main.rs        §14.3   the `basalt` binary: self-check, serve, mcp
     tests/           §14.2   the fixture corpus runners, plus the byte-exact vault
-  basalt-cli/        §14.3   the `basalt` binary and its required self-check
 ```
 
 ## Build and test
@@ -34,7 +37,16 @@ rust/
 cargo test --workspace
 ```
 
-61 tests. The ones that matter most:
+134 tests (106 without the `gist` feature). The ones that matter most:
+
+- `tests/store.rs` runs `conformance/cases/store/creation.yaml`, the §12.7
+  cases the TypeScript and Python implementations run too; `tests/write.rs`
+  drives `basalt add` and `basalt mcp --writable` through the real binary, and
+  `tests/git.rs` holds the git store to the reference's contract against
+  repositories and bare remotes on disk. `tests/gist.rs` runs the gist name
+  corpus (`conformance/cases/gist/mapping.yaml`) and drives export, import and
+  the `--gist` store against a local stand-in for the gist API, through the
+  real binary.
 
 - `tests/conformance.rs` and `tests/acl.rs` load the language-neutral corpus in
   `../conformance/` and assert against it. No expectation for behavior the spec
@@ -57,11 +69,17 @@ cargo test --workspace
   likely place for a conforming-looking implementation to leak.
 
 The S3 transport is behind a feature flag, so the core protocol builds with no
-cloud dependency at all:
+cloud dependency at all. The gist support is a feature too, but it is on by
+default so the installed binary can move folders to and from GitHub gists out
+of the box. It is a native client (`ureq` with rustls, in process, no `curl`):
+the only program it ever runs is `gh auth token`, as a last resort when
+`GITHUB_TOKEN` and `GH_TOKEN` are not set. A library user who wants neither
+turns the default off:
 
 ```bash
 cargo test --workspace                  # no AWS SDK compiled
 cargo build --features s3               # adds the S3-compatible transport
+cargo build --no-default-features       # core protocol only: no gist, no HTTP client
 ```
 
 ## The CLI
@@ -77,8 +95,20 @@ and the ACL evaluation of a named principal against a named path. It is the tool
 a vault owner runs to answer "is my private note actually private", which is why
 the spec makes it mandatory rather than optional.
 
-Other commands: `index [--write] [--force]`, `mint`, `serve [--port N]`,
-`effective --path P`, `tree`, `export --out DIR`, `digest`. `--help` for the rest.
+Other commands: `index [--write] [--force]`, `mint`, `add FILE…`,
+`serve [--port N]`, `mcp [--writable]`, `effective --path P`, `tree`,
+`export --out DIR`, `digest`, `gist export FOLDER/` and `gist import ID`. Every
+command takes `--vault DIR`, `--git DIR` (with `--remote NAME` to sync),
+`--gist ID` (a vault inside a GitHub gist) or `--bucket NAME` (with
+`--features s3`).
+`--help` for the rest.
+
+Install it from crates.io as `basalt-vault`; the binary is `basalt`:
+
+```bash
+cargo install basalt-vault                 # folders, git and gists
+cargo install basalt-vault --features s3   # also S3, MinIO and R2
+```
 
 ## Implementation notes
 

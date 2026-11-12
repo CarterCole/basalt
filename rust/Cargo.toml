@@ -1,19 +1,20 @@
 # Basalt Protocol v1 — Rust implementation.
 #
-# Two crates: the `basalt` library, which implements the protocol with no
-# cloud dependency unless the `s3` feature is on, and the `basalt` binary,
-# which is the CLI the self-check in PROTOCOL §14.3 requires.
+# One crate, `basalt-vault`: the `basalt` library, which implements the
+# protocol with no cloud dependency unless the `s3` feature is on, and the
+# `basalt` binary — the CLI, the self-check PROTOCOL §14.3 requires, and the
+# MCP server.
 [workspace]
 resolver = "2"
-members = ["basalt", "basalt-cli"]
+members = ["basalt"]
 
 [workspace.package]
 version = "1.0.0"
 edition = "2021"
 rust-version = "1.83"  # io::ErrorKind::{IsADirectory, NotADirectory}
 license = "MIT"
-repository = "https://github.com/CarterCole/basalt"
-homepage = "https://github.com/CarterCole/basalt"
+repository = "https://github.com/CarterCole/rust-basalt"
+homepage = "https://github.com/CarterCole/rust-basalt"
 keywords = ["basalt", "knowledge-base", "markdown", "s3", "vault"]
 categories = ["text-processing", "filesystem", "web-programming"]
 

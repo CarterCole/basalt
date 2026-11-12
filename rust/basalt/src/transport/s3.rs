@@ -72,6 +72,7 @@ pub struct S3Config {
 
 pub struct S3Transport {
     client: Client,
+    sts: Option<aws_sdk_sts::Client>,
     runtime: tokio::runtime::Runtime,
     bucket: String,
     prefix: String,
@@ -123,11 +124,16 @@ impl S3Transport {
                         aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired,
                     );
             }
-            Client::from_conf(builder.build())
+            // Only AWS can say whose credentials these are, and another
+            // store's keys must never be sent to AWS to ask (§12.7).
+            let sts = is_aws(flavor, cfg.endpoint.as_deref()).then(|| aws_sdk_sts::Client::new(&shared));
+            (Client::from_conf(builder.build()), sts)
         });
+        let (client, sts) = client;
 
         Ok(Self {
             client,
+            sts,
             runtime,
             bucket: cfg.bucket,
             prefix: cfg.prefix,
@@ -153,6 +159,17 @@ impl S3Transport {
     }
 }
 
+/// Whether this is AWS S3 itself: the s3 flavor, at AWS's own endpoint.
+fn is_aws(flavor: S3Flavor, endpoint: Option<&str>) -> bool {
+    if flavor != S3Flavor::S3 {
+        return false;
+    }
+    let Some(ep) = endpoint else { return true };
+    let host = ep.split("://").nth(1).unwrap_or(ep);
+    let host = host.split(['/', ':']).next().unwrap_or("");
+    host == "amazonaws.com" || host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn")
+}
+
 fn is_not_found<E: std::fmt::Debug, R>(err: &SdkError<E, R>) -> bool {
     match err {
         SdkError::ServiceError(e) => {
@@ -164,6 +181,19 @@ fn is_not_found<E: std::fmt::Debug, R>(err: &SdkError<E, R>) -> bool {
 }
 
 impl Transport for S3Transport {
+    /// STS GetCallerIdentity: the ARN of whatever signs these requests. It
+    /// needs no IAM permission, so a narrowly scoped writer can still ask.
+    fn caller_identity(&self) -> Result<Option<String>> {
+        let Some(sts) = &self.sts else { return Ok(None) };
+        self.runtime.block_on(async {
+            match tokio::time::timeout(Duration::from_secs(5), sts.get_caller_identity().send()).await {
+                Ok(Ok(out)) => Ok(out.arn().map(str::to_string)),
+                Ok(Err(e)) => Err(TransportError::Backend(format!("sts: {e}"))),
+                Err(_) => Err(TransportError::Backend("sts: timed out".into())),
+            }
+        })
+    }
+
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         self.runtime.block_on(async {
             match self

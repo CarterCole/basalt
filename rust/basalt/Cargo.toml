@@ -11,6 +11,12 @@ keywords.workspace = true
 categories.workspace = true
 readme = "../README.md"
 
+# The tests read the conformance corpus from conformance/ at the repository
+# root, which is outside this package, so they only run from a checkout.
+# Leaving them out of the published crate keeps `cargo test` on a download
+# from failing on fixtures it was never given.
+exclude = ["tests/"]
+
 # The package is `basalt-vault` because `basalt` is taken on crates.io, but
 # the library is still `basalt`: the crate name is what `use` paths say, and
 # renaming that would churn every file for a registry collision.
@@ -18,11 +24,20 @@ readme = "../README.md"
 name = "basalt"
 path = "src/lib.rs"
 
+[[bin]]
+name = "basalt"
+path = "src/main.rs"
+
 [features]
-default = []
+# The gist transport and `basalt gist export|import`: GitHub's REST API over an
+# in-process HTTPS client (ureq with rustls). On by default so the binary can
+# move a folder to and from a gist out of the box; `--no-default-features`
+# leaves the core protocol with no network code at all.
+default = ["gist"]
+gist = ["dep:ureq", "dep:serde_json"]
 # The S3-compatible transport. Off by default so the core protocol — indexing,
 # link resolution, ACL evaluation — builds with no cloud dependency at all.
-s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:tokio"]
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-sdk-sts", "dep:tokio"]
 
 [dependencies]
 md-5.workspace = true
@@ -34,15 +49,15 @@ unicode-normalization.workspace = true
 
 aws-config = { version = "1.8", optional = true, default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
 aws-sdk-s3 = { version = "1.119", optional = true, default-features = false, features = ["rt-tokio", "sigv4a"] }
-tokio = { version = "1.49", optional = true, features = ["rt-multi-thread"] }
+# Names the caller for §12.7 `created_by` (STS GetCallerIdentity). aws-config
+# already depends on it, so this adds no code to the build.
+aws-sdk-sts = { version = "1.119", optional = true, default-features = false, features = ["rt-tokio"] }
+tokio = { version = "1.49", optional = true, features = ["rt-multi-thread", "time"] }
+
+# The gist feature. Blocking and in-process: no curl, no async runtime. ureq's
+# default `rustls` feature is the only one used (no gzip, no json helper).
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_yaml_ng.workspace = true
-
-# The conformance corpus (PROTOCOL §14.2).
-#
-# `path` is what the workspace uses, so a fixture fix breaks these tests the
-# same minute it breaks the TypeScript ones. `version` is what a published
-# crate pins; Cargo strips the path on publish. Monorepo speed during
-# development, an explicit reviewable version for everyone else.
-basalt-conformance = { path = "../../packaging/crates", version = "1.0" }

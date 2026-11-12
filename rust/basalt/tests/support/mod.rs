@@ -9,18 +9,31 @@
 use serde_yaml_ng::Value as Yaml;
 use std::path::PathBuf;
 
-/// The corpus root, from the `basalt-conformance` package rather than a path
-/// of our own.
+/// The spec checkout: the directory holding `conformance/` and `protocol/`.
 ///
-/// In the workspace that package resolves to the repository's `conformance/`
-/// directory, so this still reads the live corpus. Published, it resolves to
-/// the fixtures shipped inside the crate — which is the whole point: the
-/// corpus sits outside every package directory, so a published crate reading
-/// `../../conformance` would find nothing there.
+/// In the monorepo that is the repository root. In the per-language repository
+/// it is a git submodule at `spec/`, a checkout of CarterCole/basalt pinned to
+/// the commit this release was tested against. The search walks up from the
+/// crate and takes the first directory (or its `spec/` child) that has
+/// `conformance/manifest.yaml`, so the same tests run in both layouts.
+pub fn spec_dir() -> PathBuf {
+    for dir in std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors() {
+        for candidate in [dir.join("spec"), dir.to_path_buf()] {
+            if candidate.join("conformance/manifest.yaml").is_file() {
+                return candidate;
+            }
+        }
+    }
+    panic!(
+        "the conformance corpus was not found: run `git submodule update --init` \
+         in a per-language checkout, or run from the monorepo"
+    )
+}
+
+/// The corpus root: `conformance/`, the one copy every implementation's tests
+/// read.
 pub fn conformance_dir() -> PathBuf {
-    basalt_conformance::corpus_dir()
-        .canonicalize()
-        .expect("the basalt-conformance package resolves to a corpus directory")
+    spec_dir().join("conformance")
 }
 
 pub fn load(rel: &str) -> Yaml {

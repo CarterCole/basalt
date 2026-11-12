@@ -3,8 +3,8 @@
 **A portable knowledge vault that lives in any key-value object store, with
 real per-object access control and fully derived indexes.**
 
-[The protocol](protocol/PROTOCOL.md) · [conformance corpus](conformance/) ·
-[reference implementation](ts/)
+[The protocol](https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md) · [conformance corpus](https://github.com/CarterCole/basalt/tree/main/conformance/) ·
+[reference implementation](https://github.com/CarterCole/ts-basalt)
 
 Obsidian is volcanic glass; basalt is the volcanic rock that cools into
 hexagonal columns. This is a publish-and-share system for a markdown vault,
@@ -15,8 +15,8 @@ implementations held to it.
 A vault is **a flat set of key→blob pairs and nothing else**. The storage
 layer has to do five things — get, put, delete, list, stat — and everything
 above that is content inside the same key space. Point it at a local folder,
-an S3 bucket, MinIO, or Cloudflare R2 and it behaves identically, because the
-vault carries its own structure.
+a git repository, an S3 bucket, MinIO, or Cloudflare R2 and it behaves
+identically, because the vault carries its own structure.
 
 ## The idea in one paragraph
 
@@ -34,14 +34,14 @@ bucket, because no S3-like store can express an inherited deny.
 
 ## Three deliverables
 
-- **[The protocol](protocol/PROTOCOL.md)** — the normative spec. Seventeen
+- **[The protocol](https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md)** — the normative spec. Seventeen
   sections covering the transport contract, virtual folders, dual addressing,
   the security model, link resolution, the index formats, canonical
   serialization and the conformance levels, plus
-  **[the interoperability annex](protocol/INTEROP.md)** and
-  **[the gRPC schema](protocol/basalt.proto)** for the protocols a gatekeeper
+  **[the interoperability annex](https://github.com/CarterCole/basalt/blob/main/protocol/INTEROP.md)** and
+  **[the gRPC schema](https://github.com/CarterCole/basalt/blob/main/protocol/basalt.proto)** for the protocols a gatekeeper
   speaks beyond its own.
-- **[The conformance corpus](conformance/)** — language-neutral YAML fixtures
+- **[The conformance corpus](https://github.com/CarterCole/basalt/tree/main/conformance/)** — language-neutral YAML fixtures
   plus whole vaults with expected index output. Every implementation ships a
   runner that loads these; none defines its own expectations for behavior the
   spec covers. `vaults/minimal` is `gated` and exercises the permission
@@ -54,9 +54,33 @@ bucket, because no S3-like store can express an inherited deny.
   rather than internal. `python/` is L0-L4 with no profiles yet, plus one
   thing that is not the protocol and exists only there: optional topic search
   (`basalt find`, behind the `topics` extra), outside the corpus and never
-  written to a vault.
+  written to a vault. All three can [store new objects](#storing-notes-images-and-files),
+  [keep a vault in git](#keeping-a-vault-in-git) and
+  [move folders to and from GitHub gists](#folders-to-and-from-github-gists),
+  and run the same corpus cases for creating objects and for the gist name
+  mapping.
+
+## Install
+
+Each implementation is published as `basalt-vault`, and the command it
+installs is `basalt` in all three.
+
+| | Install | With S3, MinIO and R2 |
+|---|---|---|
+| TypeScript (the reference; MCP server and publish site) | `npm install -g basalt-vault` | included, as optional dependencies |
+| Rust | `cargo install basalt-vault` | `cargo install basalt-vault --features s3` |
+| Python | `pip install basalt-vault` | `pip install 'basalt-vault[s3]'` |
+
+Gist import and export is included in all three. In Rust it is the default
+`gist` feature (a native `ureq` + rustls client, no `curl`);
+`--no-default-features` builds the core protocol without it.
+
+As a library: `npm install basalt-vault`, `cargo add basalt-vault` (imported
+as `basalt`), or `pip install basalt-vault` (imported as `basalt`).
 
 ## Run it
+
+From a checkout:
 
 ```bash
 cd ts && npm install && npm test
@@ -86,7 +110,7 @@ curl -s localhost:4380/.well-known/basalt | jq .surfaces
 
 A vault is a format, so the question is not "what is our API" but "what can
 already read this". Each surface is a translation layer with no behaviour of
-its own — [the annex](protocol/INTEROP.md) specifies them, and one test suite
+its own — [the annex](https://github.com/CarterCole/basalt/blob/main/protocol/INTEROP.md) specifies them, and one test suite
 asks all of them the same questions and compares the answers.
 
 | Surface | Endpoint | What already talks it |
@@ -95,7 +119,7 @@ asks all of them the same questions and compares the answers.
 | **GraphQL** | `/graphql`, SDL at `/graphql/schema.graphql` | web apps, Relay/Apollo, codegen |
 | **JSON-RPC 2.0** | `/rpc` | method-call clients, no handshake |
 | **MCP** | `/mcp`, or `basalt mcp` over stdio | Claude, editors, agent runtimes |
-| **gRPC / Connect** | `/basalt.v1.BasaltRead/*` + [`basalt.proto`](protocol/basalt.proto) | buf/connect clients, any language |
+| **gRPC / Connect** | `/basalt.v1.BasaltRead/*` + [`basalt.proto`](https://github.com/CarterCole/basalt/blob/main/protocol/basalt.proto) | buf/connect clients, any language |
 | **WebDAV** (read-only) | `/dav/` | Finder, Explorer, GNOME Files, Cyberduck, `rclone`, `davfs2` |
 | **Atom / RSS / sitemap / OpenSearch** | `/feed.atom`, `/feed.xml`, `/sitemap.xml`, `/opensearch.xml` | NetNewsWire, Thunderbird, crawlers, browser search bars |
 | **JSON-LD / Turtle** | `/graph.jsonld`, `/graph.ttl` | triple stores, SPARQL engines, reasoners |
@@ -136,11 +160,11 @@ its own generated OpenAPI document and MCP over both transports, held to the
 same corpus and the same equivalence questions:
 
 ```bash
-cd rust && cargo run -p basalt-cli -- serve --vault ../conformance/vaults/demo/vault
+cd rust && cargo run -- serve --vault ../conformance/vaults/demo/vault
 ```
 
 ```bash
-cd rust && cargo run -p basalt-cli -- mcp --vault ../conformance/vaults/demo/vault --principal u:carter
+cd rust && cargo run -- mcp --vault ../conformance/vaults/demo/vault --principal u:carter
 ```
 
 **Stated honestly.** Every network surface is read-only: §12 defines a read
@@ -180,8 +204,8 @@ Notes go to `Notes/` and everything else to `Assets/` unless you say
 `--to Folder/`; `--as Notes/Name.md` names the exact path of a single file,
 `-` reads stdin, and `--title` / `--alt` fill in the note's title or the
 asset's sidecar. `--principal u:someone` evaluates that principal's
-`create_child` right instead of acting as the operator. Buckets work the same
-way: swap `--vault` for `--bucket`.
+`create_child` right instead of acting as the operator. Buckets and git
+repositories work the same way: swap `--vault` for `--bucket` or `--git`.
 
 On the publish site (`serve`, or a static `export`), a note is GitHub-flavoured
 Markdown plus Obsidian's syntax:
@@ -269,12 +293,191 @@ store cannot destroy a note. It refuses a note that is not UTF-8, any object
 over 25 MiB, and an inline `basalt.acl` in a new note unless the writer also
 holds `write_acl` (otherwise `create_child` would be a way to grant yourself
 anything). Non-notes cannot sit in the vault root. Replace and delete wait on
-§11; the rules are [PROTOCOL §12.7](protocol/PROTOCOL.md). Creating is
-implemented in `ts/` only, and the corpus has no write cases yet, so `rust/`
-and `python/` are not held to it.
+§11; the rules are [PROTOCOL §12.7](https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md).
+
+All three implementations create objects and run the same corpus cases for it
+(`conformance/cases/store/creation.yaml`): the path rules, collisions, ACL
+checks, identity, and the `created_by` stamp. `basalt add` is in all three;
+`basalt mcp --writable` is in `ts/` and `rust/` (`python/` has no MCP server).
+In Rust:
+
+```bash
+cd rust && cargo run -- add ~/Pictures/photo.png --vault path/to/vault
+```
+
+```bash
+cd rust && cargo run -- mcp --vault path/to/vault --principal u:carter --writable --agent claude-code --account work
+```
 
 Tested against the filesystem, in memory and a local MinIO (create-only puts
 and the conditional sidecar update); not against real AWS S3 or R2.
+
+## Keeping a vault in git
+
+Any command takes `--git DIR` in place of `--vault DIR`: the vault root inside
+a git working tree, at the top of the repository or in a subfolder of a bigger
+one. It is still a folder. Reads come from disk, so an edit made in Obsidian
+shows at once, and nothing about the files changes.
+
+What git adds is history. Every write is committed, one commit per logical
+write: a stored note with its sidecar and refreshed indexes, a reindex, a
+mint.
+
+- **Your identity, your config.** Commits use your git identity (user.name /
+  user.email), with your hooks and signing settings. Trailers record who was
+  behind the write: `Basalt-Principal`, `Basalt-Agent`, `Basalt-Account`,
+  `Basalt-Client`.
+- **Only what basalt wrote.** The commit holds exactly the files basalt
+  wrote. Anything you have staged or are halfway through editing stays as it
+  was.
+- **No empty commits.** A reindex that changes nothing makes no commit. On
+  every store, an index that differs only in `generated` is no longer
+  rewritten (§13.2 excludes that field from comparison).
+- **Real modification times.** A file's mtime is the time of the last commit
+  that touched it, so "recent" still means something on a fresh clone.
+- **Ignored files stay out of history.** Files `.gitignore` excludes are
+  written to disk but not committed.
+
+Add `--remote origin` to sync:
+
+```bash
+node ts/bin/basalt.mjs mcp --git ~/notes --remote origin --writable --principal u:carter --agent claude-code --account laptop
+```
+
+With a remote, the store pulls when it opens and before each write, and
+pushes after each commit. It fast-forwards when it can and merges when two
+clones have diverged.
+
+- **Index-only conflicts settle themselves.** A merge that conflicts only in
+  `index/` keeps this side's indexes, rebuilds them over the merged content
+  and pushes the result.
+- **Any other conflict stops the merge.** The merge is aborted, the problem
+  is reported, and the write stays local until you merge by hand.
+- **Nothing is ever forced.** It never force-pushes, rebases or rewrites
+  history.
+- **A failed sync doesn't fail the write.** Offline, or a push rejected five
+  times, the write still succeeds. A warning goes to stderr and the commit
+  goes out with the next push.
+- **It never prompts.** It uses the ssh keys or credential helper git already
+  has, and gives up on a fetch or push after 60 seconds.
+- **Writers on one clone take turns.** A lock file in the git dir
+  (`basalt-write.lock`) lets an MCP server and a `basalt add` beside it share
+  the clone. A lock left by a process that has died is broken safely.
+
+Two clones writing through one remote, say a laptop and a server, is the case
+this is built for. One choice is yours: whether `index/` is tracked.
+Tracked, which is the default, a fresh clone is ready to serve and the Pages
+workflow works as is. Listed in `.gitignore`, history holds content only and
+each clone builds its own indexes: run `basalt index --write --git DIR` after
+cloning.
+
+**Pushing copies the whole vault to the remote.** `audience: private` is
+enforced by basalt's server, not by GitHub, so a vault pushed to a public
+repository is public whatever `basalt.yaml` says. Keep private and gated
+vaults in private repositories.
+
+Stated honestly:
+
+- A long-running `serve` or `mcp` pulls only when it writes. Notes pushed
+  from another clone show up at its next write or restart.
+- All three implementations have it, with the same flags (`--git DIR`,
+  `--remote NAME`), the same lock file and the same commit trailers, so a
+  TypeScript `basalt mcp` and a Rust or Python `basalt add` can share one
+  clone.
+- `npm test`, `cargo test` and `pytest` cover it with temporary repositories
+  and bare remotes on disk, with your global git config shut out, including
+  two clones racing through one remote. No real GitHub push is tested.
+
+## Folders to and from GitHub gists
+
+A gist is a small, flat set of text files that GitHub hosts. Basalt moves a
+folder of a vault into one and back, in any of the three implementations, with
+the same flags. Examples use the TypeScript CLI; the `basalt` command that the
+Rust and Python packages install takes the same words.
+
+```bash
+# What would be sent, and nothing sent
+node ts/bin/basalt.mjs gist export Projects/Basalt/ --vault ~/notes --dry-run
+# A new secret gist
+node ts/bin/basalt.mjs gist export Projects/Basalt/ --vault ~/notes
+# Later: write the changes into the same gist
+node ts/bin/basalt.mjs gist export Projects/Basalt/ --vault ~/notes --update 2c9f0a7e51d84b6a9e3f1c0d7b5a4e82
+# Bring a gist into a vault, as new notes under Imported/
+node ts/bin/basalt.mjs gist import https://gist.github.com/you/2c9f0a7e51d84b6a9e3f1c0d7b5a4e82 --vault ~/notes --to Imported/
+```
+
+`--vault DIR` can be `--git DIR` or `--bucket NAME` as everywhere else: the
+folder comes from, or goes to, whichever store the vault is in.
+
+**Export** reads the folder and writes its text files to a gist.
+
+- **Names are flat.** A gist has no folders, so a file's path inside the
+  folder becomes one file name, with `%` written `%25` and `/` written `%2F`:
+  `Notes/Ideas/A.md` is the file `Notes%2FIdeas%2FA.md`. Import undoes it.
+  A gist someone made by hand, with plain names, imports as it looks.
+- **Text only.** A gist holds non-empty text, so a PNG, any file that is not
+  UTF-8, and an empty file are left out. They are listed by name, never
+  dropped silently. More than 300 files is refused (the API shows no more);
+  export a smaller folder.
+- **Secret is not private.** A new gist is *secret* by default: unlisted, but
+  readable by anyone who has its URL. `--public` lists it for everyone. Either
+  way it copies the notes off your machine, and `audience: private` in
+  `basalt.yaml` is enforced by basalt's server, not by GitHub. `--dry-run`
+  shows what would go first.
+- **`--principal ID`** sends only what that principal may read, and counts
+  (without naming) what it withheld. Without it you act as the operator, as
+  `basalt add` does.
+- **`--update ID`** adds new files and rewrites changed ones, and sends
+  nothing if nothing changed. It leaves files that are in the gist but not in
+  the folder, and says so; `--prune` removes them. A gist keeps its revisions
+  either way. `--public` is for new gists only, because GitHub does not let a
+  gist change sides. `--description TEXT` sets the gist's description.
+
+**Import** stores every file of a gist as a new object, as `basalt add`
+does (§12.7): each gets an id, notes keep their text and take a fresh id, and
+a file whose path is taken is refused and reported, never replaced. The rest
+still go in. The default folder is `Gists/<id>/`. On a git store the whole
+import is one commit. Reading a public or secret gist needs no token.
+
+**The token.** Writing needs a GitHub token with the `gist` scope, read from
+`GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token` (a login in the GitHub
+CLI's keyring). There is no `--token` flag, which would put it in shell
+history and `ps`. It is sent only to the API host, over https, and never to
+the host that serves raw files. `--api-url URL` (or `GITHUB_API_URL`) points at
+GitHub Enterprise.
+
+### A whole vault in a gist
+
+`gist export --whole` sends every key of the vault, not just a folder's
+content, so the result is itself a vault, and `--gist ID` opens it like
+`--vault`, `--git` or `--bucket`:
+
+```bash
+node ts/bin/basalt.mjs gist export --whole --vault ~/notes
+node ts/bin/basalt.mjs add note.md --gist 2c9f0a7e51d84b6a9e3f1c0d7b5a4e82
+node ts/bin/basalt.mjs mcp --gist 2c9f0a7e51d84b6a9e3f1c0d7b5a4e82 --principal u:carter
+```
+
+Stated honestly, a gist is a small store, not a general one:
+
+- **Small and text.** At most 300 files, and a write of a binary or empty
+  file is refused by name. Keep images in a folder, git or bucket vault.
+- **One revision per batch.** A `basalt add` is one gist revision, however
+  many files and indexes it writes.
+- **Not atomic.** GitHub has no conditional write, so two writers at once can
+  overwrite each other; the create-only guarantee is checked against a fresh
+  read, not enforced by the server. For a vault written from two places, use
+  `--git` with `--remote`.
+- **Reads are cached for 30 seconds** (the API allows 60 reads an hour without
+  a token). A long-running `serve` or `mcp` sees another writer's change after
+  that, or at its next write.
+- `--whole` is for the operator and refuses `--principal`: it copies ACLs,
+  principals and indexes as they are.
+
+Tested with `npm test`, `cargo test` and `pytest` against a local stand-in for
+the gist API that is as strict as GitHub is known to be (no `/` in a name, no
+empty file, a 401 without the token, a file cut short over a size). Not
+tested against github.com itself.
 
 ## Testing against a real object store
 
@@ -330,7 +533,8 @@ Deliberately *not* required: server-side ACLs, directories, multi-key
 transactions, or per-object metadata beyond those three fields. Those are the
 things S3-like stores disagree about, so the protocol builds over the
 intersection rather than the union. A local filesystem satisfies all five
-trivially; so does a zip file or a Postgres large-object table.
+trivially; so does a git working tree, a zip file or a Postgres large-object
+table.
 
 ## Publishing to GitHub Pages
 
@@ -394,7 +598,7 @@ orthogonal to levels because they do not stack: speaking GraphQL implies
 nothing about speaking WebDAV. A vault declares what it serves in
 `publish.interop` — present, it is a ceiling a gatekeeper may not exceed;
 absent, the vault claims nothing and the operator decides — and
-[`conformance/cases/interop/`](conformance/cases/interop/) holds the
+[`conformance/cases/interop/`](https://github.com/CarterCole/basalt/tree/main/conformance/cases/interop/) holds the
 requirements and the equivalence questions. `ts/` serves all eight profiles,
 `rust/` serves `P-REST`, `P-MCP` and `P-INTEROP`, `python/` none yet.
 

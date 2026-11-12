@@ -3,6 +3,7 @@
 use crate::acl::{Descriptor, Group, Principals, User};
 use crate::canonical::{parse_json, Json};
 use crate::frontmatter::{kind_for, parse_note, with_id, yaml_text, Kind, Severity};
+use crate::yamltext::{self, Out};
 use crate::indexer::{
     build_indexes, build_search_index, compute_digest, BuildInput, BuiltIndexes, FolderRecord,
     IndexedNode, Issue, Scanned, Sidecar, SidecarEntry,
@@ -14,7 +15,7 @@ use crate::keys::{
 use crate::manifest::{Manifest, StalePolicy};
 use crate::order::{compare_utf8, sort_utf8};
 use crate::security::{check_access, effective_rights, AccessResult, DescriptorStore, FolderAcl};
-use crate::transport::{fs::now_rfc3339, PutMeta, Transport};
+use crate::transport::{fs::now_rfc3339, BatchInfo, PutMeta, Transport};
 use serde_yaml_ng::Value as Yaml;
 use std::collections::BTreeMap;
 
@@ -193,6 +194,86 @@ impl Vault {
         };
         v.load_meta()?;
         Ok(v)
+    }
+
+    /// Re-read the manifest, principals, folder records, sidecars and ACL
+    /// files from the store. A long-lived process calls this before a write so
+    /// that it never honours a grant revoked since it started (§12.7 item 3).
+    /// Inline ACLs come from note frontmatter, so from a reindex; the last
+    /// reindex's are kept.
+    pub fn reload(&mut self) -> Result<()> {
+        let raw = Self::read_text(&*self.transport, MANIFEST)?.ok_or_else(|| {
+            VaultError::NotAVault(format!("not a Basalt vault: {MANIFEST} is missing"))
+        })?;
+        let parsed: Yaml = serde_yaml_ng::from_str(&raw)
+            .map_err(|e| VaultError::Manifest(format!("{MANIFEST}: {e}")))?;
+        self.manifest = Manifest::from_yaml(&parsed).map_err(VaultError::Manifest)?;
+        self.principals = Self::load_principals(&*self.transport)?;
+        let inline = std::mem::take(&mut self.descriptors.inline_acls);
+        self.folder_records.clear();
+        self.sidecars.clear();
+        self.load_meta()?;
+        self.descriptors.inline_acls = inline;
+        Ok(())
+    }
+
+    /// Run `f` with its writes grouped, on a store that can group them (the
+    /// git store makes them one commit). Batches nest; only the outermost
+    /// names the commit. The batch is finished even when `f` fails, because
+    /// the store has changed either way, and when pushing had to merge first,
+    /// the indexes are rebuilt so what goes out covers the merged content.
+    pub fn batch<R, E>(&mut self, info: BatchInfo, f: impl FnOnce(&mut Self) -> std::result::Result<R, E>) -> std::result::Result<R, E>
+    where
+        E: From<VaultError>,
+    {
+        self.transport.begin_batch().map_err(|e| E::from(VaultError::from(e)))?;
+        let out = f(self);
+        let end = self.transport.end_batch(&info);
+        let end = match (end, &out) {
+            (Ok(end), _) => end,
+            (Err(e), Ok(_)) => return Err(E::from(VaultError::from(e))),
+            (Err(e), Err(_)) => {
+                eprintln!("basalt: {e}");
+                return out;
+            }
+        };
+        if end.rederive {
+            self.rederive();
+        }
+        out
+    }
+
+    /// Finish a batch begun with `transport.begin_batch()` by hand, as
+    /// [`Vault::batch`] does: name the commit, and rebuild the indexes if
+    /// pushing had to merge first.
+    pub fn finish_batch(&mut self, info: &BatchInfo) -> Result<()> {
+        if self.transport.end_batch(info)?.rederive {
+            self.rederive();
+        }
+        Ok(())
+    }
+
+    /// Rebuild and persist the indexes after a merge, as a commit of its own.
+    /// Bounded: each round pushes, and a push that has to merge again asks
+    /// for another.
+    fn rederive(&mut self) {
+        for _ in 0..5 {
+            let step = (|| -> Result<crate::transport::BatchEnd> {
+                self.transport.begin_batch()?;
+                let r = self.reload().and_then(|_| self.reindex(true));
+                let end = self.transport.end_batch(&BatchInfo::message("Rebuild indexes after merging"))?;
+                r?;
+                Ok(end)
+            })();
+            match step {
+                Ok(end) if end.rederive => continue,
+                Ok(_) => return,
+                Err(e) => {
+                    eprintln!("basalt: could not rebuild the indexes after merging: {e}");
+                    return;
+                }
+            }
+        }
     }
 
     fn read_text(t: &dyn Transport, key: &str) -> Result<Option<String>> {
@@ -494,15 +575,27 @@ impl Vault {
                     });
                 }
             }
-            for (name, key) in INDEX_KEYS {
-                if let Some(obj) = indexes.by_name(name) {
-                    self.transport.put(
-                        key,
-                        &obj.to_canonical_bytes(),
-                        &PutMeta::content_type("application/json"),
-                    )?;
+            let t = &self.transport;
+            t.begin_batch()?;
+            let wrote = (|| -> Result<()> {
+                for (name, key) in INDEX_KEYS {
+                    let Some(obj) = indexes.by_name(name) else { continue };
+                    // §13.2 leaves `generated` out of comparison, so an index
+                    // that differs only there is already the stored one, and
+                    // rewriting it would be a write (on a git store, a commit)
+                    // that says nothing.
+                    if let Some(stored) = Self::read_text(&**t, key)? {
+                        if same_but_generated(obj, &stored) {
+                            continue;
+                        }
+                    }
+                    t.put(key, &obj.to_canonical_bytes(), &PutMeta::content_type("application/json"))?;
                 }
-            }
+                Ok(())
+            })();
+            let end = t.end_batch(&BatchInfo::message("Rebuild indexes"));
+            wrote?;
+            end?;
         }
         self.indexes = Some(indexes);
         Ok(())
@@ -913,6 +1006,21 @@ impl Vault {
     /// `id: null` and MUST NOT invent ephemeral ids, which is what the index
     /// pass does when this is never called.
     pub fn mint_ids(&mut self) -> Result<Vec<(String, String)>> {
+        self.transport.begin_batch()?;
+        let minted = self.mint_inner();
+        let n = minted.as_ref().map(|m| m.len()).unwrap_or(0);
+        let end = self.transport.end_batch(&BatchInfo::message(format!(
+            "Mint ids for {n} object{}",
+            if n == 1 { "" } else { "s" }
+        )));
+        let minted = minted?;
+        if end?.rederive {
+            self.rederive();
+        }
+        Ok(minted)
+    }
+
+    fn mint_inner(&mut self) -> Result<Vec<(String, String)>> {
         let mut minted = Vec::new();
         let scanned = self.scan()?;
         for item in &scanned {
@@ -949,15 +1057,33 @@ impl Vault {
                     continue;
                 }
                 let id = crate::ulid();
-                let sc = self.sidecars.entry(folder.clone()).or_default();
-                sc.entries.entry(name).or_default().id = Some(id.clone());
-                let yaml = render_sidecar(sc);
-                self.transport.put(
-                    &format!("{META}folders/{folder}entries.yaml"),
-                    yaml.as_bytes(),
-                    &PutMeta::default(),
-                )?;
-                minted.push((item.path.clone(), id));
+                // Spliced into the file rather than rendered from what this
+                // crate parsed, which would drop `alt`, `created_by` and every
+                // comment (§13.4).
+                let key = format!("{META}folders/{folder}entries.yaml");
+                let existing = Self::read_text(&*self.transport, &key)?;
+                let mut entry = vec![("id".to_string(), Out::Str(id.clone()))];
+                if let Some(Ok(Yaml::Mapping(m))) = existing.as_deref().map(serde_yaml_ng::from_str::<Yaml>) {
+                    // An entry that has a title or alt text but no id keeps them.
+                    if let Some(Yaml::Mapping(old)) = m.get("entries").and_then(|e| e.get(name.as_str())) {
+                        for (k, v) in old {
+                            if let (Some(k), Some(v)) = (k.as_str(), yamltext::from_yaml(v)) {
+                                if k != "id" {
+                                    entry.push((k.to_string(), v));
+                                }
+                            }
+                        }
+                    }
+                }
+                match yamltext::add_sidecar_entry(existing.as_deref(), &name, &entry) {
+                    Ok(yaml) => {
+                        self.transport.put(&key, yaml.as_bytes(), &PutMeta::content_type("text/yaml"))?;
+                        let sc = self.sidecars.entry(folder.clone()).or_default();
+                        sc.entries.entry(name).or_default().id = Some(id.clone());
+                        minted.push((item.path.clone(), id));
+                    }
+                    Err(why) => eprintln!("refusing to rewrite {key}: {why}"),
+                }
             }
         }
         Ok(minted)
@@ -1197,6 +1323,20 @@ impl Vault {
 /// Only used for a sidecar this implementation is creating or extending; a
 /// hand-written one with comments is never reserialized, because §13.4 forbids
 /// stripping them.
+/// Whether stored JSON text equals `obj` once `generated` is set aside.
+fn same_but_generated(obj: &Json, stored: &str) -> bool {
+    let Ok(Json::Object(mut s)) = parse_json(stored) else {
+        return false;
+    };
+    let Json::Object(mut o) = obj.clone() else {
+        return false;
+    };
+    s.remove("generated");
+    o.remove("generated");
+    Json::Object(s).to_canonical_string() == Json::Object(o).to_canonical_string()
+}
+
+#[allow(dead_code)]
 fn render_sidecar(sc: &Sidecar) -> String {
     let mut out = String::from("entries:\n");
     if sc.entries.is_empty() {

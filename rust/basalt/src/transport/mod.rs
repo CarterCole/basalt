@@ -15,14 +15,20 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 pub mod fs;
+pub mod git;
+#[cfg(feature = "gist")]
+pub mod gist;
 pub mod memory;
 #[cfg(feature = "s3")]
 pub mod s3;
 
 pub use fs::FsTransport;
+pub use git::GitTransport;
+#[cfg(feature = "gist")]
+pub use gist::{GistApi, GistError, GistTransport};
 pub use memory::MemoryTransport;
 #[cfg(feature = "s3")]
-pub use s3::{S3Flavor, S3Transport};
+pub use s3::{S3Config, S3Flavor, S3Transport};
 
 /// Optional capabilities, each declared in the manifest (§3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -126,6 +132,35 @@ impl From<crate::keys::KeyError> for TransportError {
 
 pub type Result<T> = std::result::Result<T, TransportError>;
 
+/// What a grouped write is called, on a store that keeps history.
+#[derive(Debug, Clone, Default)]
+pub struct BatchInfo {
+    /// The commit subject. Left out, the store names the keys it wrote.
+    pub message: Option<String>,
+    /// Git trailers, e.g. `("Basalt-Principal", "u:carter")`.
+    pub trailers: Vec<(String, String)>,
+}
+
+impl BatchInfo {
+    pub fn message(m: impl Into<String>) -> Self {
+        Self {
+            message: Some(m.into()),
+            trailers: Vec::new(),
+        }
+    }
+}
+
+/// What finishing a batch did.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BatchEnd {
+    /// A commit was made.
+    pub committed: bool,
+    /// Pushing had to merge the remote's work first, so the derived keys
+    /// (`index/`) no longer cover the content. The vault rebuilds them in a
+    /// batch of its own, which pushes again.
+    pub rederive: bool,
+}
+
 /// The five operations of §1, plus the optional `presign` of §12.4.
 pub trait Transport: Send + Sync {
     /// Whole-object read. `None` is NOT_FOUND.
@@ -155,6 +190,30 @@ pub trait Transport: Send + Sync {
     /// Mint a time-limited direct read URL (§12.4).
     fn presign(&self, _key: &str, _ttl_seconds: u64) -> Result<String> {
         Err(TransportError::Unsupported("presign"))
+    }
+
+    /// What the store says the credentials behind this process belong to
+    /// (§12.7 `caller`), or `None` when it has no way to say. Only AWS S3
+    /// answers; a filesystem, MinIO or R2 does not.
+    fn caller_identity(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Start grouping writes (the git store makes them one commit). Batches
+    /// nest: an inner one joins the outer, and only the outermost
+    /// [`Transport::end_batch`] commits. Elsewhere a no-op — the protocol never
+    /// depends on writes being grouped (§1 asks for no multi-key
+    /// transactions), so this only shapes the history a store keeps. Use
+    /// [`crate::vault::Vault::batch`] rather than calling the pair by hand.
+    fn begin_batch(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Finish the innermost batch. `info` names the commit; it is used only
+    /// by the outermost batch. Called even when the work failed, because the
+    /// store has changed either way.
+    fn end_batch(&self, _info: &BatchInfo) -> Result<BatchEnd> {
+        Ok(BatchEnd::default())
     }
 
     /// Enumerate every key under a prefix, following pagination to the end.

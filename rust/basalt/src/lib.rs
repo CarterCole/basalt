@@ -32,6 +32,13 @@
 //! not served here; a vault may still declare them for an implementation that
 //! does.
 //!
+//! It also creates objects (§12.7, [`store`]) — the one write, create-only,
+//! offered by `basalt add` and `basalt mcp --writable` — and can keep a vault
+//! in a git working tree ([`transport::GitTransport`]), committing each write.
+//! With the `gist` feature (on by default) a folder can be copied to and from a
+//! GitHub gist ([`gist`]) and a whole vault can live in one
+//! ([`transport::GistTransport`]).
+//!
 //! ```no_run
 //! use basalt::{transport::FsTransport, vault::Vault};
 //!
@@ -46,6 +53,8 @@ pub mod acl;
 pub mod canonical;
 pub mod frontmatter;
 pub mod gatekeeper;
+#[cfg(feature = "gist")]
+pub mod gist;
 pub mod indexer;
 pub mod keys;
 pub mod links;
@@ -53,8 +62,10 @@ pub mod manifest;
 pub mod order;
 pub mod security;
 pub mod serve;
+pub mod store;
 pub mod transport;
 pub mod vault;
+pub mod yamltext;
 
 pub use canonical::Json;
 pub use manifest::Manifest;

@@ -1,0 +1,270 @@
+# Creating objects, PROTOCOL §12.7.
+#
+# §12.7 is optional and belongs to no conformance level, so this suite is
+# keyed by feature rather than level: a runner executes it when its
+# implementation stores objects, and every implementation that does must
+# agree with every case here.
+#
+# Three kinds of case:
+#
+#   label   an operator's agent or account label → accepted or refused
+#   caller  a store identity → what is written, or refused
+#   store   one request against a fresh scratch copy of vaults/minimal
+#
+# A store case may first make `given` requests, as the operator with no
+# provenance, each of which must succeed. Then the request itself:
+#
+#   principal   null is the operator holding the vault's credentials (§12.7
+#               item 2 does not apply); anything else is evaluated by §8.4
+#   path        the vault path
+#   text        UTF-8 content, or
+#   base64      binary content
+#   title, alt  optional labels
+#   provenance  optional {agent, account, caller, client: {name, version}}.
+#               Present (even empty), the object is stamped `created_by`.
+#
+# and what must follow:
+#
+#   refused     the fault code; the object at the content key (if any) and
+#               the stored indexes MUST be exactly as they were
+#   stored      the kind (§5.1). A runner MUST also check: the object is in a
+#               reindex of the vault with a fresh ULID (never one the content
+#               supplied); anything but a note is stored as exactly the input
+#               bytes and its id is in the folder's entry sidecar; the stored
+#               index/nodes.json lists it (the vault is left fresh, item 7)
+#   title       the node's title in index/nodes.json
+#   alt         the sidecar entry's alt
+#   created_by  the stamp without `at`, read from basalt.created_by in a
+#               note's frontmatter or the sidecar entry otherwise. `at` MUST
+#               be present and RFC 3339 UTC to the second (…T12:00:00Z).
+#               null means no stamp at all.
+#   sidecar_keeps
+#               entries already in the sidecar that MUST survive unchanged
+basalt: 1
+feature: store
+spec: "12.7"
+
+cases:
+  # --------------------------------------------------------------- labels
+  - {name: an agent name, kind: label, value: claude-code, ok: true}
+  - {name: an account name, kind: label, value: work, ok: true}
+  - {name: label with a colon, kind: label, value: "copilot:acme", ok: true}
+  - {name: label with every allowed mark, kind: label, value: a/b.c_d-e, ok: true}
+  - {name: label at 64 characters, kind: label, value: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, ok: true}
+  - {name: label over 64 characters, kind: label, value: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, ok: false}
+  - {name: an email address is not a label, kind: label, value: carter@example.com, ok: false}
+  - {name: a label starts with a letter or digit, kind: label, value: "-lead", ok: false}
+  - {name: no spaces, kind: label, value: has space, ok: false}
+
+  # -------------------------------------------------------------- callers
+  - name: an IAM user ARN is kept as it is
+    kind: caller
+    value: "arn:aws:iam::123456789012:user/alice"
+    out: "arn:aws:iam::123456789012:user/alice"
+  - name: a role session named after an email address is hashed, lowercased first
+    kind: caller
+    value: "arn:aws:sts::123456789012:assumed-role/Writer/Alice@Example.com"
+    out: "arn:aws:sts::123456789012:assumed-role/Writer/sha256:ff8d9819fc0e12bf"
+  - name: only the segment holding the address is hashed
+    kind: caller
+    value: "arn:aws:iam::123456789012:user/a@b.co/x"
+    out: "arn:aws:iam::123456789012:user/sha256:80305c9bb1bb2480/x"
+  - {name: a space is not in the ARN alphabet, kind: caller, value: "arn:aws:iam::1:user/bad name", out: null}
+  - {name: nor is a letter outside ASCII, kind: caller, value: "arn:aws:iam::1:user/émile", out: null}
+
+  # ------------------------------------------------------- what is stored
+  - name: a note gets an id and its title
+    kind: store
+    request: {principal: u:editor, path: Notes/Idea.md, text: "Some thought.\n", title: An idea}
+    stored: note
+    title: An idea
+    created_by: null
+  - name: a title never replaces the author's own
+    kind: store
+    request: {principal: null, path: Notes/Mine.md, text: "---\ntitle: Mine\n---\nbody\n", title: Not mine}
+    stored: note
+    title: Mine
+  - name: an image is stored byte for byte and bound by a sidecar, beside the entries already there
+    kind: store
+    request:
+      principal: null
+      path: Assets/photo.png
+      # A PNG signature, then bytes that are not UTF-8.
+      base64: iVBORw0KGgr//gCAwyj9
+      title: A photo
+      alt: Columns at dusk
+    stored: asset
+    alt: Columns at dusk
+    sidecar_keeps: [diagram.png]
+  - name: any other file is stored whole
+    kind: store
+    request: {principal: null, path: Assets/paper.pdf, base64: JVBERi0xLjQK}
+    stored: asset
+  - name: a data file must be UTF-8 but is otherwise kept as it is
+    kind: store
+    request: {principal: null, path: Data/points.json, text: "[1, 2, 3]\n"}
+    stored: data
+  - name: a supplied id is never trusted
+    kind: store
+    request: {principal: u:editor, path: Notes/Copy.md, text: "---\nbasalt:\n  id: 01jbq100000000000000000002\n---\ncopy\n"}
+    stored: note
+
+  # ------------------------------------------------------------- refusals
+  - name: never overwrites
+    kind: store
+    request: {principal: u:editor, path: Notes/Hexes.md, text: "# replaced\n"}
+    refused: conflict
+  - name: a different case of an existing note collides
+    kind: store
+    request: {principal: null, path: Notes/hexes.md, text: x}
+    refused: conflict
+  - name: a folder that differs only in case collides
+    kind: store
+    request: {principal: null, path: notes/Other.md, text: x}
+    refused: conflict
+  - name: a file cannot sit where a folder is
+    kind: store
+    given: [{path: Notes/Deep/x.md, text: x}]
+    request: {principal: null, path: Notes/Deep, text: x}
+    refused: conflict
+  - name: a folder cannot sit where a file is
+    kind: store
+    request: {principal: null, path: Notes/Hexes.md/inside.md, text: x}
+    refused: conflict
+  - {name: an empty path, kind: store, request: {principal: null, path: "", text: x}, refused: bad_request}
+  - {name: an absolute path, kind: store, request: {principal: null, path: /abs.md, text: x}, refused: bad_request}
+  - {name: an empty segment, kind: store, request: {principal: null, path: Notes//double.md, text: x}, refused: bad_request}
+  - {name: a parent segment, kind: store, request: {principal: null, path: Notes/../escape.md, text: x}, refused: bad_request}
+  - {name: a dot segment, kind: store, request: {principal: null, path: Notes/./dot.md, text: x}, refused: bad_request}
+  - {name: a folder path, kind: store, request: {principal: null, path: Notes/, text: x}, refused: bad_request}
+  - {name: a NUL, kind: store, request: {principal: null, path: "Notes/\0nul.md", text: x}, refused: bad_request}
+  - {name: a name that is not NFC, kind: store, request: {principal: null, path: "Notes/é.md", text: x}, refused: bad_request}
+  - {name: a name the listing skips (.tmp), kind: store, request: {principal: null, path: Notes/draft.md.tmp, text: x}, refused: bad_request}
+  - {name: a name the listing skips (.DS_Store), kind: store, request: {principal: null, path: Notes/.DS_Store, text: x}, refused: bad_request}
+  - {name: a name the listing skips (.git), kind: store, request: {principal: null, path: .git/config.md, text: x}, refused: bad_request}
+  - {name: under index/, kind: store, request: {principal: null, path: index/x.md, text: x}, refused: bad_request}
+  - {name: under meta/, kind: store, request: {principal: null, path: meta/x.md, text: x}, refused: bad_request}
+  - {name: under principals/, kind: store, request: {principal: null, path: principals/x.md, text: x}, refused: bad_request}
+  - {name: under history/, kind: store, request: {principal: null, path: history/x.md, text: x}, refused: bad_request}
+  - name: a segment over 255 bytes
+    kind: store
+    request:
+      principal: null
+      path: Notes/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md
+      text: x
+    refused: bad_request
+  - {name: an image at the root, kind: store, request: {principal: null, path: logo.png, base64: iVBORw0KGgo=}, refused: bad_request}
+  - {name: a data file at the root, kind: store, request: {principal: null, path: data.json, text: "{}"}, refused: bad_request}
+  - name: a note that is not UTF-8
+    kind: store
+    request: {principal: null, path: Notes/latin1.md, base64: Y2Fm6Q==}
+    refused: bad_request
+  - name: the same bytes are fine as a binary asset
+    kind: store
+    request: {principal: null, path: Assets/latin1.bin, base64: Y2Fm6Q==}
+    stored: opaque
+
+  # ---------------------------------------------------------------- access
+  - name: an editor holds create_child on Notes/
+    kind: store
+    request: {principal: u:editor, path: Notes/Editors.md, text: "# hi\n"}
+    stored: note
+  - name: a reader can see Notes/, so is told plainly it may not create there
+    kind: store
+    request: {principal: u:reader, path: Notes/Readers.md, text: "# hi\n"}
+    refused: forbidden
+  - name: an editor has no create_child on Assets/
+    kind: store
+    request: {principal: u:editor, path: Assets/e.png, base64: iVBORw0KGgo=}
+    refused: forbidden
+  - name: nor on the root
+    kind: store
+    request: {principal: u:editor, path: Top.md, text: "# hi\n"}
+    refused: forbidden
+  - name: the gated audience hides the folder from anonymous, so it is not found (§12.3)
+    kind: store
+    request: {principal: anonymous, path: Notes/Anon.md, text: "# hi\n"}
+    refused: not_found
+  - name: an inline ACL needs write_acl as well as create_child
+    kind: store
+    request:
+      principal: u:editor
+      path: Notes/Sneaky.md
+      text: "---\nbasalt:\n  acl:\n    owner: u:editor\n    dacl:\n      - {type: allow, subject: everyone, rights: [full_control], flags: []}\n---\nbody\n"
+    refused: forbidden
+  - name: the operator may store a note with an inline ACL
+    kind: store
+    request:
+      principal: null
+      path: Notes/Locked.md
+      text: "---\nbasalt:\n  acl:\n    owner: u:carter\n    dacl:\n      - {type: allow, subject: u:carter, rights: [full_control], flags: []}\n---\nbody\n"
+    stored: note
+
+  # ------------------------------------------------------------ provenance
+  - name: a note is stamped with the principal, labels, caller and client
+    kind: store
+    request:
+      principal: u:editor
+      path: Notes/Stamped.md
+      text: "body\n"
+      provenance:
+        agent: claude-code
+        account: work
+        caller: "arn:aws:sts::123456789012:assumed-role/Writer/Alice@Example.com"
+        client: {name: claude-ai, version: "0.1.0"}
+    stored: note
+    created_by:
+      principal: u:editor
+      agent: claude-code
+      account: work
+      caller: "arn:aws:sts::123456789012:assumed-role/Writer/sha256:ff8d9819fc0e12bf"
+      client: {name: claude-ai, version: "0.1.0"}
+  - name: the operator has no principal to record, and unknown keys are left out
+    kind: store
+    request: {principal: null, path: Notes/Plain.md, text: "body\n", provenance: {agent: claude-code}}
+    stored: note
+    created_by: {agent: claude-code}
+  - name: an empty provenance still records the principal and the time
+    kind: store
+    request: {principal: u:editor, path: Notes/When.md, text: "body\n", provenance: {}}
+    stored: note
+    created_by: {principal: u:editor}
+  - name: an asset is stamped in its sidecar entry
+    kind: store
+    request:
+      principal: null
+      path: Assets/stamped.png
+      base64: iVBORw0KGgo=
+      provenance: {account: home}
+    stored: asset
+    created_by: {account: home}
+    sidecar_keeps: [diagram.png]
+  - name: a note cannot supply its own created_by
+    kind: store
+    request:
+      principal: u:editor
+      path: Notes/Forged.md
+      text: "---\nbasalt:\n  created_by: {principal: u:carter, agent: someone-else}\n---\nbody\n"
+      provenance: {agent: claude-code}
+    stored: note
+    created_by: {principal: u:editor, agent: claude-code}
+  - name: what the client calls itself is data, one line and bounded
+    kind: store
+    request:
+      principal: u:editor
+      path: Notes/Client.md
+      text: "body\n"
+      provenance:
+        client: {name: "evil\nprincipal: u:carter", version: "1\u2028two"}
+    stored: note
+    created_by:
+      principal: u:editor
+      client: {name: "evil principal: u:carter", version: "1 two"}
+  - name: a bad label refuses the store before anything is written
+    kind: store
+    request: {principal: u:editor, path: Notes/Bad.md, text: "body\n", provenance: {agent: carter@example.com}}
+    refused: bad_request
+  - name: a caller that is not an identity refuses the store before anything is written
+    kind: store
+    request: {principal: u:editor, path: Notes/Bad.md, text: "body\n", provenance: {caller: "not an arn"}}
+    refused: bad_request

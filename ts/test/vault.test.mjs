@@ -2,13 +2,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
+import { corpusPath } from './support/spec.mjs';
 
-const VAULT = fileURLToPath(
-  new URL('../../conformance/vaults/minimal/vault', import.meta.url));
+const VAULT = corpusPath('vaults/minimal/vault');
 
 async function loaded() {
   const v = new Vault(new FsTransport(VAULT));

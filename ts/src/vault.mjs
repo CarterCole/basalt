@@ -34,6 +34,16 @@ export class Vault {
     this.loaded = false;
   }
 
+  /**
+   * Run `fn` with its writes grouped, on a transport that can group them
+   * (the git store makes them one commit). Elsewhere it just runs `fn`: the
+   * protocol never depends on writes being grouped (§1 asks for no
+   * multi-key transactions), so this only shapes the history a store keeps.
+   */
+  batch(info, fn) {
+    return typeof this.t.batch === 'function' ? this.t.batch(info, fn) : fn();
+  }
+
   // ------------------------------------------------------------- loading
 
   async #text(key) {
@@ -175,10 +185,17 @@ export class Vault {
           throw err;
         }
       }
-      for (const [name, key] of Object.entries(INDEX_KEYS)) {
-        const obj = this.indexes[name];
-        if (obj) await this.t.put(key, canonicalBytes(obj), { contentType: 'application/json' });
-      }
+      await this.batch({ message: 'Rebuild indexes' }, async () => {
+        for (const [name, key] of Object.entries(INDEX_KEYS)) {
+          const obj = this.indexes[name];
+          if (!obj) continue;
+          // §13.2 leaves `generated` out of comparison, so an index that
+          // differs only there is already the stored one. Rewriting it would
+          // be a write (and, on a git store, a commit) that says nothing.
+          if (sameBut('generated', obj, await this.#text(key))) continue;
+          await this.t.put(key, canonicalBytes(obj), { contentType: 'application/json' });
+        }
+      });
     }
     return this.indexes;
   }
@@ -402,7 +419,17 @@ export class Vault {
    * Mint ids for unbound objects and persist them (§4.3) — frontmatter for
    * notes, the folder sidecar otherwise.
    */
-  async mintIds() {
+  mintIds() {
+    let count = 0;
+    return this.batch({ message: () => `Mint ids for ${count} object${count === 1 ? '' : 's'}` },
+      async () => {
+        const minted = await this.#mint();
+        count = minted.length;
+        return minted;
+      });
+  }
+
+  async #mint() {
     const minted = [];
     const scanned = await this.scan();
     for (const { key, path, bytes } of scanned) {
@@ -429,6 +456,15 @@ export class Vault {
     }
     return minted;
   }
+}
+
+/** Whether stored JSON text equals `obj` once `field` is set aside in both. */
+function sameBut(field, obj, storedText) {
+  if (storedText === null) return false;
+  let stored;
+  try { stored = JSON.parse(storedText); } catch { return false; }
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
+  return canonicalJson({ ...stored, [field]: null }) === canonicalJson({ ...obj, [field]: null });
 }
 
 /** ULID (§4.1): 48-bit timestamp + 80 bits of randomness, Crockford base32. */

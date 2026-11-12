@@ -8,6 +8,10 @@ import path from 'node:path';
 import { Vault, INDEX_KEYS } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { S3Transport } from '../src/transport/s3.mjs';
+import { GitTransport } from '../src/transport/git.mjs';
+import { GistTransport, GistApi, parseGistId } from '../src/transport/gist.mjs';
+import { exportToGist, importFromGist, folderPath } from '../src/gist.mjs';
+import { INDEX } from '../src/keys.mjs';
 import { Gatekeeper, ALL_SURFACES } from '../src/gatekeeper.mjs';
 import { Router } from '../src/serve/router.mjs';
 import { Site } from '../src/web/site.mjs';
@@ -30,19 +34,66 @@ function flag(name, fallback = undefined) {
   return i === -1 ? fallback : (args[i + 1] ?? true);
 }
 
-/** Build a transport from flags: --vault for a local path, --bucket for S3. */
-function transport() {
-  const bucket = flag('bucket');
-  if (bucket) {
-    return new S3Transport({
-      bucket,
-      prefix: flag('prefix', ''),
-      endpoint: flag('endpoint'),
-      region: flag('region'),
-      flavor: flag('flavor', 's3'),
-    });
+/**
+ * Build a transport from flags. One store per process: --vault for a plain
+ * folder (the default, "."), --git for a folder in a git working tree,
+ * --bucket for S3, MinIO or R2, --gist for a GitHub gist. Adding a store is
+ * adding a row here.
+ */
+const STORES = {
+  vault: (dir) => new FsTransport(path.resolve(dir)),
+  git: (dir) => new GitTransport(path.resolve(dir), {
+    remote: stringFlag('remote'),
+    // Indexes are rebuilt from content (§10), so a merge that conflicts only
+    // in them keeps this side's and lets the next reindex settle it.
+    derived: [INDEX],
+  }),
+  bucket: (bucket) => new S3Transport({
+    bucket,
+    prefix: flag('prefix', ''),
+    endpoint: flag('endpoint'),
+    region: flag('region'),
+    flavor: flag('flavor', 's3'),
+  }),
+  gist: (id) => new GistTransport({ id, api: gistApi() }),
+};
+
+/** The GitHub client. The token comes from the environment, never a flag. */
+function gistApi() {
+  return new GistApi({ apiUrl: stringFlag('api-url') });
+}
+
+/** Flags that take a value, so the words left over are the positional ones. */
+const VALUE_FLAGS = new Set(['vault', 'git', 'remote', 'bucket', 'prefix', 'endpoint', 'region',
+  'flavor', 'gist', 'api-url', 'to', 'as', 'title', 'alt', 'principal', 'agent', 'account',
+  'update', 'description', 'out', 'base', 'port', 'surfaces', 'public-url', 'cors', 'delivery', 'path']);
+
+function positionals(from) {
+  const out = [];
+  for (let i = from; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      if (VALUE_FLAGS.has(args[i].slice(2))) i++;
+    } else out.push(args[i]);
   }
-  return new FsTransport(path.resolve(flag('vault', '.')));
+  return out;
+}
+
+function stringFlag(name) {
+  const v = flag(name);
+  if (v === true) throw new Error(`--${name} needs a value`);
+  return v;
+}
+
+function transport() {
+  const given = Object.keys(STORES).filter((name) => flag(name) !== undefined);
+  if (given.length > 1) {
+    throw new Error(`pick one store: ${given.map((n) => `--${n}`).join(' and ')} were both given`);
+  }
+  const name = given[0] ?? 'vault';
+  if (flag('remote') !== undefined && name !== 'git') {
+    throw new Error('--remote is for a git store (--git DIR)');
+  }
+  return STORES[name](given.length ? stringFlag(name) : '.');
 }
 
 const C = {
@@ -54,8 +105,16 @@ const C = {
 };
 
 async function open() {
-  const v = new Vault(transport());
+  const t = transport();
+  // A git store checks it is in a working tree and, with --remote, pulls.
+  if (typeof t.ready === 'function') await t.ready();
+  const v = new Vault(t);
   await v.load();
+  // After a push that had to merge first, rebuild the indexes so what goes
+  // out matches the merged content.
+  if (t instanceof GitTransport) {
+    t.rederive = async () => { await v.load(); await v.reindex({ write: true }); };
+  }
   return v;
 }
 
@@ -81,21 +140,21 @@ async function lookupCaller(v) {
 
 const USAGE = `basalt — reference implementation of the Basalt Protocol v1
 
-  basalt check   [--vault DIR | --bucket B] [--principal ID] [--path P]
+  basalt check   [--vault DIR | --git DIR | --bucket B] [--principal ID] [--path P]
                  Self-check (§14.3): integrity, index freshness, whether a
                  rebuild reproduces the stored indexes byte for byte, and the
                  ACL evaluation of a principal against a path.
 
-  basalt index   [--vault DIR | --bucket B] [--write] [--force]
+  basalt index   [--vault DIR | --git DIR | --bucket B] [--write] [--force]
                  Rebuild every index from content alone. --write persists them.
                  Writing an empty index over a non-empty one is refused
                  (§10.7) unless --force; the usual cause is a transport
                  pointed at the wrong bucket or prefix.
 
-  basalt mint    [--vault DIR | --bucket B]
+  basalt mint    [--vault DIR | --git DIR | --bucket B]
                  Mint node ids for unbound objects (§4.3).
 
-  basalt add     <FILE>... [--to FOLDER/] [--vault DIR | --bucket B]
+  basalt add     <FILE>... [--to FOLDER/] [--vault DIR | --git DIR | --bucket B]
                  [--title T] [--alt A] [--principal ID]
                  [--agent LABEL] [--account LABEL]
                  basalt add - --as PATH        (content from stdin)
@@ -113,7 +172,33 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  you are. On AWS S3 the stamp also names the caller: the
                  ARN AWS reports for the credentials doing the write.
 
-  basalt serve   [--vault DIR | --bucket B] [--port N] [--principal ID]
+  basalt gist export FOLDER/ | --whole  [--update ID [--prune]] [--public]
+                 [--description TEXT] [--dry-run] [--principal ID]
+                 [--vault DIR | --git DIR | --bucket B]
+                 Send a vault folder to a GitHub gist: a NEW secret gist, or
+                 --update to write into one you already have. A gist is flat
+                 and holds non-empty text, so a file's path inside FOLDER/
+                 becomes one file name ("Notes/A.md" is "Notes%2FA.md"), and
+                 a binary or empty file is left out and listed, never dropped
+                 silently. --whole sends every key of the vault, so the gist
+                 opens as a vault with --gist. A secret gist is unlisted, not
+                 private: anyone with its URL can read it, whatever
+                 basalt.yaml says. --public lists it. --dry-run prints what
+                 would be sent and sends nothing. --update only adds and
+                 changes files; --prune also removes the gist's files the
+                 folder no longer has. --principal sends only what that
+                 principal may read. The token is read from GITHUB_TOKEN or
+                 GH_TOKEN (or \`gh auth token\`), never from a flag.
+
+  basalt gist import ID|URL [--to FOLDER/] [--principal ID]
+                 [--agent LABEL] [--account LABEL]
+                 [--vault DIR | --git DIR | --bucket B]
+                 Store every file of a gist as a NEW object under FOLDER/
+                 (default Gists/<id>/), as \`basalt add\` does: each gets an
+                 id, and one whose path is taken is refused, never replaced.
+                 A public or secret gist needs no token to read.
+
+  basalt serve   [--vault DIR | --git DIR | --bucket B] [--port N] [--principal ID]
                  [--surfaces LIST] [--public-url URL] [--cors ORIGIN]
                  Serve the publish site and every interop surface (§12,
                  INTEROP): REST+OpenAPI, GraphQL, JSON-RPC, MCP, Connect/gRPC
@@ -128,7 +213,7 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
                  IRIs behind a proxy. --cors is off by default on purpose:
                  these responses are per-principal.
 
-  basalt mcp     [--vault DIR | --bucket B] [--principal ID] [--writable]
+  basalt mcp     [--vault DIR | --git DIR | --bucket B] [--principal ID] [--writable]
                  [--agent LABEL] [--account LABEL]
                  Serve one vault to an MCP client over stdio (INTEROP §4.2).
                  Nothing but JSON-RPC goes to stdout; diagnostics go to
@@ -155,7 +240,7 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
   basalt tree    [--principal ID]
                  The visible tree for a principal.
 
-  basalt export  [--vault DIR | --bucket B] [--out DIR] [--base /repo]
+  basalt export  [--vault DIR | --git DIR | --bucket B] [--out DIR] [--base /repo]
                  [--clean] [--with-vault]
                  Export the PUBLIC subset as a static site (§12.6): only
                  nodes granting both read and publish to anonymous, with
@@ -166,7 +251,23 @@ const USAGE = `basalt — reference implementation of the Basalt Protocol v1
   basalt conformance-regen [--vault DIR] [--out DIR]
                  Regenerate a conformance vault's expected/ index output.
 
-S3-compatible stores: --bucket NAME --endpoint URL --flavor s3|minio|r2
+Stores (pick one; every command takes the same flags):
+  --vault DIR    a plain folder (the default, ".")
+  --git DIR      a folder in a git working tree. Reads come from disk; each
+                 write (a stored note, a reindex, a mint) is one commit, made
+                 with your git identity, of only the files basalt wrote.
+                 Files .gitignore excludes are written but not committed.
+    --remote NAME  also pull before each write and push after it (never
+                 forced). Offline or rejected, the write still succeeds and
+                 the commit goes out with the next push. Pushing copies the
+                 vault to that remote: a private audience is enforced by
+                 basalt's server, not by the git host.
+  --bucket NAME  S3, MinIO or R2: --endpoint URL --flavor s3|minio|r2
+                 [--prefix P/] [--region R]
+  --gist ID|URL  a whole vault inside one gist (made with \`gist export
+                 --whole\`). Text only, at most 300 files; a batch of writes
+                 is one gist revision. Writes need GITHUB_TOKEN. --api-url
+                 URL points at GitHub Enterprise.
 `;
 
 try {
@@ -265,15 +366,8 @@ try {
     }
 
     case 'add': {
-      // Flags that take a value, so the remaining words are the files.
-      const takesValue = new Set(['vault', 'bucket', 'prefix', 'endpoint', 'region',
-        'flavor', 'to', 'as', 'title', 'alt', 'principal', 'agent', 'account']);
-      const sources = [];
-      for (let i = 1; i < args.length; i++) {
-        if (args[i].startsWith('--')) {
-          if (takesValue.has(args[i].slice(2))) i++;
-        } else sources.push(args[i]);
-      }
+      // The words left once the flags and their values are set aside are the files.
+      const sources = positionals(1);
       if (!sources.length) throw new Error('add needs a file to store, or - for stdin with --as PATH');
 
       const as = flag('as');
@@ -307,44 +401,151 @@ try {
 
       let stored = 0;
       let refused = 0;
-      for (const src of sources) {
-        try {
-          let bytes;
-          let name;
-          if (src === '-') {
-            if (!as) throw new Error('content from stdin needs --as PATH');
-            const chunks = [];
-            for await (const c of process.stdin) chunks.push(c);
-            bytes = Buffer.concat(chunks);
-          } else {
-            if ((await stat(src)).isDirectory()) {
-              throw new Error('is a directory; add the files in it');
+      const storedPaths = [];
+      // On a git store the whole command is one commit: every file it stored
+      // and the one index refresh at the end.
+      await v.batch({
+        message: () => storedPaths.length === 1 ? `Add ${storedPaths[0]}`
+          : `Add ${storedPaths.length} files`,
+        trailers: principal ? { 'Basalt-Principal': principal } : {},
+      }, async () => {
+        for (const src of sources) {
+          try {
+            let bytes;
+            let name;
+            if (src === '-') {
+              if (!as) throw new Error('content from stdin needs --as PATH');
+              const chunks = [];
+              for await (const c of process.stdin) chunks.push(c);
+              bytes = Buffer.concat(chunks);
+            } else {
+              if ((await stat(src)).isDirectory()) {
+                throw new Error('is a directory; add the files in it');
+              }
+              bytes = await readFile(src);
+              // macOS hands out decomposed (NFD) filenames, which §1.1 rejects.
+              name = path.basename(src).normalize('NFC');
             }
-            bytes = await readFile(src);
-            // macOS hands out decomposed (NFD) filenames, which §1.1 rejects.
-            name = path.basename(src).normalize('NFC');
+            const dest = as ?? folderFor(name) + name;
+            const r = await storeObject(v, {
+              principal, path: dest, bytes, title, alt, provenance, reindex: false,
+            });
+            stored++;
+            storedPaths.push(r.path);
+            console.log(`${C.green('stored')}  ${r.path}  ${C.dim(`${r.id}  ${r.kind}, ${size(r.size)}`)}`);
+          } catch (err) {
+            refused++;
+            console.error(`${C.red('refused')} ${src === '-' ? 'stdin' : src}: ${err.message}`);
           }
-          const dest = as ?? folderFor(name) + name;
-          const r = await storeObject(v, {
-            principal, path: dest, bytes, title, alt, provenance, reindex: false,
-          });
-          stored++;
-          console.log(`${C.green('stored')}  ${r.path}  ${C.dim(`${r.id}  ${r.kind}, ${size(r.size)}`)}`);
-        } catch (err) {
-          refused++;
-          console.error(`${C.red('refused')} ${src === '-' ? 'stdin' : src}: ${err.message}`);
         }
-      }
-      if (stored) {
-        // One index pass for the whole batch (the stores skip it for speed).
-        const idx = await v.reindex({ write: true });
-        const issues = idx.integrity.entries;
-        const errs = issues.filter((i) => i.severity === 'error').length;
-        const warns = issues.length - errs;
-        console.log(C.dim(`indexes refreshed · integrity ${errs} errors, ${warns} warnings`));
-      }
+        if (stored) {
+          // One index pass for the whole batch (the stores skip it for speed).
+          const idx = await v.reindex({ write: true });
+          const issues = idx.integrity.entries;
+          const errs = issues.filter((i) => i.severity === 'error').length;
+          const warns = issues.length - errs;
+          console.log(C.dim(`indexes refreshed · integrity ${errs} errors, ${warns} warnings`));
+        }
+      });
       process.exitCode = refused ? 1 : 0;
       break;
+    }
+
+    case 'gist': {
+      if (args.some((a) => a === '--token' || a.startsWith('--token='))) {
+        // A token on the command line lands in shell history and `ps`.
+        throw new Error('there is no --token flag: set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`');
+      }
+      const sub = args[1];
+      const rest = positionals(2);
+      const api = gistApi();
+      const principal = flag('principal') || null;
+      const size = (n) => n < 1024 ? `${n} B`
+        : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+      const why = { empty: 'empty', not_text: 'not text a gist can hold', name_too_long: 'name too long', invalid_key: 'not a valid vault path' };
+      const skippedLines = (skipped) => {
+        if (!skipped.length) return;
+        console.log(C.yellow(`left out ${skipped.length} file(s) a gist cannot hold:`));
+        for (const s of skipped.slice(0, 20)) console.log(C.yellow(`  ${s.path}  (${why[s.reason] ?? s.reason})`));
+        if (skipped.length > 20) console.log(C.dim(`  …${skipped.length - 20} more`));
+      };
+
+      if (sub === 'export') {
+        const whole = args.includes('--whole');
+        if (whole ? rest.length : rest.length !== 1) {
+          throw new Error('gist export needs one folder (e.g. Projects/), or --whole');
+        }
+        const update = flag('update') === undefined ? undefined : parseGistId(stringFlag('update'));
+        if (flag('update') !== undefined && !update) throw new Error('--update needs a gist id or URL');
+        const v = await open();
+        // A principal's view needs inline ACLs, which come from a reindex.
+        if (principal) await v.reindex();
+        const r = await exportToGist(v, {
+          folder: whole ? '' : folderPath(rest[0]),
+          whole,
+          api,
+          update,
+          prune: args.includes('--prune'),
+          public: args.includes('--public'),
+          description: flag('description') === undefined ? undefined : stringFlag('description'),
+          principal,
+          dryRun: args.includes('--dry-run'),
+        });
+        const where = r.public ? C.red('PUBLIC') : 'secret';
+        if (r.dryRun) {
+          console.log(`would send ${r.count} file(s), ${size(r.bytes)}, as a new ${where} gist` +
+            C.dim(' (nothing sent: --dry-run)'));
+          for (const n of r.names) console.log(`  ${n}`);
+        }
+        skippedLines(r.skipped);
+        if (r.withheld) {
+          console.log(C.dim(`${r.withheld} file(s) withheld: ${principal} may not read them`));
+        }
+        if (!r.dryRun) {
+          if (r.created) {
+            console.log(`${C.green('created')} ${where} gist ${r.url}`);
+            console.log(C.dim(`  ${r.count} file(s), ${size(r.bytes)}` + (r.public
+              ? '. It is public: anyone can find and read it.'
+              : '. Secret means unlisted, not private: anyone with the URL can read it.')));
+          } else if (!r.updated) {
+            console.log(`${C.green('up to date')}  ${r.url}  ${C.dim(`${r.unchanged} file(s) unchanged`)}`);
+          } else {
+            console.log(`${C.green('updated')} ${where} gist ${r.url}`);
+            console.log(C.dim(`  ${r.written} written, ${r.unchanged} unchanged` +
+              (r.removed ? `, ${r.removed} removed` : '')));
+          }
+          if (r.left?.length) {
+            console.log(C.yellow(`${r.left.length} file(s) in the gist are not in the folder ` +
+              `(--prune removes them): ${r.left.slice(0, 5).join(', ')}${r.left.length > 5 ? ', …' : ''}`));
+          }
+        }
+        break;
+      }
+
+      if (sub === 'import') {
+        if (rest.length !== 1) throw new Error('gist import needs one gist id or URL');
+        const id = parseGistId(rest[0]);
+        if (!id) throw new Error(`not a gist id or URL: ${rest[0]}`);
+        const agent = checkProvenanceLabel('--agent', flag('agent'));
+        const account = checkProvenanceLabel('--account', flag('account'));
+        const v = await open();
+        const caller = await lookupCaller(v);
+        const provenance = agent || account || caller ? { agent, account, caller } : undefined;
+        const to = flag('to') === undefined ? `Gists/${id}/` : folderPath(stringFlag('to'));
+        const r = await importFromGist(v, {
+          api, id, to, principal, provenance,
+          log: (o) => console.log(`${C.green('stored')}  ${o.path}  ` +
+            C.dim(`${o.id}  ${o.kind}, ${size(o.size)}`)),
+        });
+        for (const x of r.refused) console.error(`${C.red('refused')} ${x.name}: ${x.error}`);
+        console.log(C.dim(`${r.stored.length} stored, ${r.refused.length} refused, from ` +
+          `${r.gist.public ? 'public' : 'secret'} gist ${r.gist.url ?? r.gist.id}` +
+          (r.stored.length ? ' · indexes refreshed' : '')));
+        process.exitCode = r.refused.length ? 1 : 0;
+        break;
+      }
+
+      throw new Error('gist takes export or import (basalt gist export FOLDER/, basalt gist import ID)');
     }
 
     case 'serve': {
@@ -475,8 +676,10 @@ try {
       const caller = writable ? await lookupCaller(v) : undefined;
       const who = [agent && `agent ${agent}`, account && `account ${account}`]
         .filter(Boolean).join(', ');
+      const where = v.t instanceof GitTransport
+        ? ` (git${v.t.remote ? `, syncing with ${v.t.remote} ${v.t.remoteUrl}` : ', local only'})` : '';
       process.stderr.write(
-        `basalt mcp: vault ${v.manifest.vault.id} as ${principal}` +
+        `basalt mcp: vault ${v.manifest.vault.id}${where} as ${principal}` +
         `${writable ? ' (may create notes, images and files' +
           `${who ? `; stamped ${who}` : '; stamped with no agent or account, see --agent/--account'}` +
           `${caller ? `; caller ${caller}` : ''})` : ''}\n`);
@@ -488,8 +691,26 @@ try {
       const which = args[1];
       const base = flag('base', 'http://127.0.0.1:4380');
       if (which === 'proto') {
-        const file = new URL('../../protocol/basalt.proto', import.meta.url);
-        process.stdout.write(await readFile(file, 'utf8'));
+        // basalt.proto belongs to the spec checkout (protocol/), not to this
+        // package: the monorepo has it two levels up, a per-language repository
+        // carries the spec as a submodule at spec/, and an installed package
+        // has neither.
+        let proto = null;
+        for (const rel of ['../../protocol/basalt.proto', '../spec/protocol/basalt.proto']) {
+          try {
+            proto = await readFile(new URL(rel, import.meta.url), 'utf8');
+            break;
+          } catch (err) {
+            if (err.code !== 'ENOENT') throw err;
+          }
+        }
+        if (proto === null) {
+          process.stderr.write('basalt.proto is part of the spec, not of this package: ' +
+            'https://github.com/CarterCole/basalt/blob/main/protocol/basalt.proto\n');
+          process.exitCode = 1;
+          break;
+        }
+        process.stdout.write(proto);
         break;
       }
       if (which === 'graphql') {

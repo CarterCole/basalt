@@ -18,22 +18,20 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { S3Transport } from '../src/transport/s3.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
 import { validateKey } from '../src/keys.mjs';
+import { corpusPath } from './support/spec.mjs';
 
 const ENDPOINT = process.env.BASALT_S3_ENDPOINT;
 const FLAVOR = process.env.BASALT_S3_FLAVOR ?? 'minio';
 const BUCKET = process.env.BASALT_S3_BUCKET ?? `basalt-test-${Date.now()}`;
 const skip = ENDPOINT ? false : 'set BASALT_S3_ENDPOINT to run S3 tests';
 
-const VAULT_DIR = fileURLToPath(
-  new URL('../../conformance/vaults/minimal/vault', import.meta.url));
-const EXPECTED = fileURLToPath(
-  new URL('../../conformance/vaults/minimal/expected/', import.meta.url));
+const VAULT_DIR = corpusPath('vaults/minimal/vault');
+const EXPECTED = corpusPath('vaults/minimal/expected/');
 
 function makeTransport(prefix = '') {
   return new S3Transport({

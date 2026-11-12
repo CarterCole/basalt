@@ -247,7 +247,8 @@ make and is true only because the rules in PROTOCOL §12.7 hold.
 Refusals are tool errors (§1.3) with `{error, status, detail}`. Besides the
 shared fault table, two codes exist for this tool alone: `conflict` (409, the
 path is taken or collides) and `too_large` (413). They are not rows in the
-fault table, which is owned by the corpus and has no write cases yet.
+fault table: the corpus's store cases (`cases/store/creation.yaml`) name
+them, and the read surfaces never raise them.
 
 ## 5. gRPC and Connect
 

@@ -7,13 +7,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { Principals } from '../src/acl.mjs';
 import { DescriptorStore, checkAccess } from '../src/security.mjs';
+import { corpusPath } from './support/spec.mjs';
 
-const CORPUS = fileURLToPath(
-  new URL('../../conformance/cases/acl/evaluation.yaml', import.meta.url));
+const CORPUS = corpusPath('cases/acl/evaluation.yaml');
 const corpus = YAML.parse(readFileSync(CORPUS, 'utf8'));
 
 /** Turn a case's `descriptors` map into a DescriptorStore. */

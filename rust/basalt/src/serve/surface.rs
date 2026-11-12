@@ -168,6 +168,12 @@ impl Surface {
         f(&self.vault.lock().expect("vault lock"))
     }
 
+    /// Change the vault, for the one write (§12.7). Never for answering a
+    /// read; callers invalidate the cache afterwards.
+    pub fn with_vault_mut<R>(&self, f: impl FnOnce(&mut Vault) -> R) -> R {
+        f(&mut self.vault.lock().expect("vault lock"))
+    }
+
     pub fn vault_id(&self) -> String {
         self.with_vault(|v| v.manifest.vault_id.clone())
     }
@@ -786,6 +792,42 @@ pub fn media_for(path: &str) -> &'static str {
         ".txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
+}
+
+/// Strict base64 decoding: the bare standard alphabet with `=` padding, and
+/// whitespace ignored. Anything else — a `data:` URI, the URL-safe alphabet,
+/// a truncated tail — is refused rather than half-decoded.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let s: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if s.len() % 4 != 0 {
+        return None;
+    }
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    for (i, chunk) in s.chunks(4).enumerate() {
+        let last = i == s.len() / 4 - 1;
+        let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
+        if pad > 2 || (pad > 0 && !last) {
+            return None;
+        }
+        let mut n: u32 = 0;
+        for &c in &chunk[..4 - pad] {
+            n = (n << 6) | val(c)?;
+        }
+        n <<= 6 * pad as u32;
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - pad]);
+    }
+    Some(out)
 }
 
 /// Base64, for the surfaces that carry bytes inside a JSON string.

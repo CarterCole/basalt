@@ -9,10 +9,10 @@ __pycache__/
 # Static export output (regenerate with `basalt export`)
 dist/
 
-# Corpus copies made by scripts/sync-corpus.mjs immediately before a release.
-# The corpus itself lives once, at conformance/; these are never committed.
-packaging/*/assets/
-
 # Local MCP client wiring: `basalt mcp` servers pointed at a vault on this
 # machine, so the paths are absolute and mean nothing in another checkout.
 .mcp.json
+
+# Claude Code's per-machine state: launch configs with local paths, AWS
+# profiles and bucket names, and the worktrees it creates.
+.claude/

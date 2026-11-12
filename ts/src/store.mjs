@@ -286,7 +286,13 @@ async function addSidecarEntry(vault, folder, name, entry) {
 export function storeObject(vault, {
   principal = null, path, bytes, title, alt, provenance, reindex = true, maxBytes = MAX_STORE_BYTES,
 }) {
-  return serialized(vault, async () => {
+  // On a store that groups writes (git), the object, its sidecar and the
+  // refreshed indexes become one commit, which says who stored it.
+  const commit = {
+    message: `Add ${typeof path === 'string' ? path : 'an object'}`,
+    trailers: commitTrailers(principal, provenance),
+  };
+  return serialized(vault, () => vault.batch(commit, async () => {
     // Reload principals, ACLs and sidecars from the store on every write. A
     // long-lived process (an MCP server) loaded them once at startup; honoring
     // a grant the owner has since revoked, or rebuilding the indexes over
@@ -415,5 +421,28 @@ export function storeObject(vault, {
       created: true,
       ...(createdBy ? { created_by: createdBy } : {}),
     };
-  });
+  }));
+}
+
+/**
+ * Git trailers naming who stored an object, from the same declared labels the
+ * `created_by` record holds. The principal is recorded even without them; the
+ * operator at the command line (`null`) is whoever the commit's author is.
+ */
+function commitTrailers(principal, provenance) {
+  // A label that fails the check is refused inside the store (buildCreatedBy),
+  // before anything is written; here it is simply left out.
+  const label = (name, v) => { try { return checkProvenanceLabel(name, v); } catch { return undefined; } };
+  const t = {};
+  if (typeof principal === 'string' && principal) t['Basalt-Principal'] = principal;
+  const agent = label('agent', provenance?.agent);
+  if (agent) t['Basalt-Agent'] = agent;
+  const account = label('account', provenance?.account);
+  if (account) t['Basalt-Account'] = account;
+  const client = cleanClientField(provenance?.client?.name);
+  if (client) {
+    const version = cleanClientField(provenance?.client?.version);
+    t['Basalt-Client'] = version ? `${client} ${version}` : client;
+  }
+  return t;
 }

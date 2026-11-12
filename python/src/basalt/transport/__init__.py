@@ -20,6 +20,7 @@ timestamps.
 from __future__ import annotations
 
 import abc
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -120,6 +121,20 @@ class Transport(abc.ABC):
     def presign(self, key: str, *, ttl_seconds: int = 300) -> str:
         """Mint a time-limited direct read URL (§12.4). Optional capability."""
         raise NotImplementedError(f"{type(self).__name__} does not support presign")
+
+    def caller_identity(self) -> str | None:
+        """What the store says these credentials belong to (§12.7 ``caller``).
+
+        ``None`` when it has no way to say. Only AWS S3 answers.
+        """
+        return None
+
+    def batch(self, *, message: Any = None, trailers: dict[str, str] | None = None) -> Any:
+        """Group the writes made inside a ``with`` block (the git store makes
+        them one commit). Elsewhere it does nothing: the protocol never depends
+        on writes being grouped (§1 asks for no multi-key transactions).
+        ``message`` is the commit subject, or a function of the keys written."""
+        return contextlib.nullcontext()
 
 
 __all__ = [

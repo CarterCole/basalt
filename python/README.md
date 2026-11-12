@@ -1,8 +1,9 @@
-# basalt-protocol — the Basalt Protocol v1 in Python
+# basalt-vault — the Basalt Protocol v1 in Python
 
-An independent implementation of [the Basalt Protocol](../protocol/PROTOCOL.md),
+An independent implementation of [the Basalt Protocol](https://github.com/CarterCole/basalt/blob/main/protocol/PROTOCOL.md),
 held to the same language-neutral fixture corpus as the
-[TypeScript reference](../ts/) in [`conformance/`](../conformance/).
+[TypeScript reference](https://github.com/CarterCole/ts-basalt) in
+[`conformance/`](https://github.com/CarterCole/basalt/tree/main/conformance).
 
 **Conformance: L0–L4** (§14.1) — Transport, Content, Index, Security,
 Gatekeeper. L5 (history) is not implemented.
@@ -22,22 +23,26 @@ $ diff -r /tmp/regen ../conformance/vaults/minimal/expected/   # no output
 ## Install
 
 ```bash
-uv sync
+pip install basalt-vault
 ```
 
-`boto3` is an optional extra, so the core protocol — indexing, link
-resolution, ACL evaluation — runs with no cloud dependency installed:
+This installs the `basalt` package and the `basalt` command. `boto3` is an
+optional extra, so the core protocol — indexing, link resolution, ACL
+evaluation — runs with no cloud dependency installed:
 
 ```bash
-uv sync --extra s3
+pip install 'basalt-vault[s3]'
 ```
 
 [Topic search](#topic-search-optional-not-protocol) is a second extra, because
 gensim brings numpy and scipy with it:
 
 ```bash
-uv sync --extra topics
+pip install 'basalt-vault[topics]'
 ```
+
+From a checkout, `uv sync` (with `--extra s3` or `--extra topics`) sets up the
+same thing for development.
 
 Dependencies are deliberately few: `ruamel.yaml`, because §13.4 requires
 comments be preserved when an implementation edits YAML it did not author, and
@@ -84,6 +89,8 @@ bug visible.
 basalt check       self-check (§14.3)
 basalt index       rebuild every index from content alone; --write to persist
 basalt mint        mint node ids for unbound objects (§4.3)
+basalt add         store a note, image or file as a NEW object (§12.7)
+basalt gist        export a folder to a GitHub gist, or import a gist into a vault
 basalt serve       run the gatekeeper (§12)
 basalt effective   effective rights with the deciding ACE per right (§8.7)
 basalt tree        the visible tree for a principal
@@ -91,7 +98,10 @@ basalt digest      the content digest and index freshness (§10.6)
 basalt find        find notes by topic (optional, not protocol; needs the topics extra)
 ```
 
-Every command takes either `--vault DIR` or an S3-compatible store:
+Every command takes `--vault DIR`, `--git DIR` (a folder in a git working
+tree: each write is one commit, `--remote NAME` to pull and push), `--gist ID`
+(a vault inside a GitHub gist: text only, at most 300 files), or an
+S3-compatible store:
 
 ```bash
 basalt check --bucket my-vault --endpoint https://….r2.cloudflarestorage.com --flavor r2
@@ -118,15 +128,21 @@ src/basalt/
   security.py     §8.5, §8.6  descriptor chains and the traverse composition
   indexer.py      §10    every index, plus the merkle digest
   vault.py        §3     the facade: load, scan, reindex, read, mint
+  store.py        §12.7  creating objects: notes, images, any file
   gatekeeper.py   §12    the HTTP read surface
   cli.py          §14.3  the self-check and friends
   topics.py       (none) topic search; optional and not protocol, see below
-  transport/      §1     the five operations: local, memory, S3
+  gist.py         (none) `basalt gist export` and `import`
+  transport/      §1     the five operations: local, memory, git, gist, S3
 tests/
   test_conformance.py  the L0-L2 corpus
   test_acl.py          the L3 corpus
   test_expected.py     byte-exact index reproduction
   test_gatekeeper.py   L4, including the §12.5 cache-leak test
+  test_store_conformance.py  the §12.7 corpus, shared with ts/ and rust/
+  test_git.py          the git store, against repositories on disk
+  test_gist.py         the gist name corpus, export, import and the gist store,
+                       against a local stand-in for the gist API
   …
 ```
 
@@ -176,8 +192,8 @@ It is not part of the protocol, and these are the places that shows:
 uv run pytest
 ```
 
-237 tests, of which 15 need the `topics` extra and are skipped without it. The
-97 that come from `conformance/` define nothing themselves —
+312 tests, of which 15 need the `topics` extra and are skipped without it. The
+157 that come from `conformance/` define nothing themselves —
 every expectation is loaded from the corpus, because §14.2 is explicit that no
 implementation defines its own answers for behavior the spec covers. The rest
 cover the conditions §4–§12 describe in prose that no single fixture exercises

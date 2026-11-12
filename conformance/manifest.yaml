@@ -15,6 +15,15 @@ suites:
   - {file: cases/links/resolution.yaml,       level: L2, spec: "9.2", cases: 13}
   - {file: cases/acl/evaluation.yaml,         level: L3, spec: "8.4", cases: 24}
 
+# Creating objects is optional and outside every level (§12.7), so its suite
+# is keyed by feature. An implementation that stores objects runs it.
+  - {file: cases/store/creation.yaml,         feature: store, spec: "12.7", cases: 60}
+
+# Moving folders to and from GitHub gists is tooling around the protocol, not
+# part of it, so it has no section and no level. An implementation that talks
+# to gists runs this suite.
+  - {file: cases/gist/mapping.yaml,           feature: gist, spec: "tooling", cases: 36}
+
 # Interop suites are keyed by profile rather than level (§17): they describe
 # the same read surface in other protocols, and none is a prerequisite for
 # another.

@@ -139,6 +139,23 @@ class Vault:
         self.loaded = True
         return self
 
+    def reload(self) -> Vault:
+        """Re-read the manifest, principals, folder records, sidecars and ACLs.
+
+        A long-lived process calls this before a write so it never honours a
+        grant revoked since it started (§12.7 item 3). Inline ACLs come from
+        note frontmatter, so from a reindex; the last reindex's are kept.
+        """
+        inline = dict(self.descriptors.inline_acls or {}) if self.descriptors else {}
+        self.load()
+        self.descriptors = DescriptorStore(folder_acls=self.folder_acls, inline_acls=inline)
+        return self
+
+    def batch(self, *, message: Any = None, trailers: dict[str, str] | None = None) -> Any:
+        """Group the writes made in a ``with`` block, on a store that can (git:
+        one commit). Batches nest; only the outermost names the commit."""
+        return self.t.batch(message=message, trailers=trailers)
+
     def _load_meta(self) -> None:
         keys = self.t.list(META).keys
         folder_acls: dict[str, Any] = {}
@@ -351,9 +368,16 @@ class Vault:
                     f"pointed at the right bucket and prefix, then pass force "
                     f"to override."
                 )
-        for name, key in INDEX_KEYS.items():
-            obj = built.as_dict().get(name)
-            if obj is not None:
+        with self.batch(message="Rebuild indexes"):
+            for name, key in INDEX_KEYS.items():
+                obj = built.as_dict().get(name)
+                if obj is None:
+                    continue
+                # §13.2 leaves `generated` out of comparison, so an index that
+                # differs only there is already the stored one; rewriting it
+                # would be a write (on a git store, a commit) that says nothing.
+                if _same_but_generated(obj, self._text(key)):
+                    continue
                 self.t.put(key, canonical_bytes(obj), content_type="application/json")
 
     def _readable_by_everyone(self, path: str) -> bool:
@@ -638,6 +662,12 @@ class Vault:
         ACLs and links to something that ceases to exist.
         """
         minted: list[dict[str, str]] = []
+        n = lambda _keys: f"Mint ids for {len(minted)} object{'' if len(minted) == 1 else 's'}"  # noqa: E731
+        with self.batch(message=n):
+            self._mint(minted)
+        return minted
+
+    def _mint(self, minted: list[dict[str, str]]) -> None:
         for item in self.scan():
             kind = kind_for(item.path)
             if kind == "note":
@@ -668,7 +698,6 @@ class Vault:
                 key = f"{META}folders/{folder}entries.yaml"
                 self.t.put(key, self._rewrite_sidecar(key, sidecar).encode("utf-8"))
                 minted.append({"path": item.path, "id": node_id, "where": "sidecar"})
-        return minted
 
     def _rewrite_sidecar(self, key: str, sidecar: dict[str, Any]) -> str:
         """Serialize a sidecar, preserving the comments of an existing file (§13.4)."""
@@ -693,6 +722,19 @@ class Vault:
             return doc
 
         return yamlio.edit(existing, mutate)
+
+
+def _same_but_generated(obj: dict[str, Any], stored: str | None) -> bool:
+    """Whether stored JSON text equals ``obj`` once ``generated`` is set aside."""
+    if stored is None:
+        return False
+    try:
+        old = json.loads(stored)
+    except ValueError:
+        return False
+    if not isinstance(old, dict):
+        return False
+    return canonical_bytes({**old, "generated": None}) == canonical_bytes({**obj, "generated": None})
 
 
 #: Crockford base32, lowercase (§4.1).

@@ -1,0 +1,59 @@
+# Pushing a tag `vX.Y.Z` publishes basalt-vault X.Y.Z to PyPI.
+#
+# The tag has to match the version in pyproject.toml, and the whole suite has
+# to pass against the conformance corpus pinned in the `spec` submodule, so a
+# tag records exactly which corpus the release was checked against.
+#
+# Authentication is keyless (a PyPI Trusted Publisher for this repository,
+# workflow `release.yml` and environment `pypi`). A repository secret named
+# PYPI_API_TOKEN is used instead if one is set.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@v5
+      - name: Tag matches the package version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in pyproject.toml"
+            exit 1
+          fi
+      - name: Tests, including the conformance corpus
+        run: uv run --group dev pytest -q
+      - name: Build the sdist and the wheel
+        run: uv build
+      - name: Check the metadata PyPI will render
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

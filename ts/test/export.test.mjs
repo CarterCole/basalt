@@ -10,13 +10,13 @@ import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../src/vault.mjs';
 import { FsTransport } from '../src/transport/fs.mjs';
 import { exportSite, applyBase } from '../src/web/export.mjs';
+import { corpusPath } from './support/spec.mjs';
 
-const DEMO = fileURLToPath(new URL('../../conformance/vaults/demo/vault', import.meta.url));
-const MINIMAL = fileURLToPath(new URL('../../conformance/vaults/minimal/vault', import.meta.url));
+const DEMO = corpusPath('vaults/demo/vault');
+const MINIMAL = corpusPath('vaults/minimal/vault');
 
 /** The withheld note, by every string that could identify it. */
 const WITHHELD = {

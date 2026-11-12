@@ -87,8 +87,8 @@ prefix matching, per-object metadata beyond the three `stat` fields, or any
 report of prior existence from `delete` (§1.2). Those
 are the capabilities S3-like stores disagree about, so the protocol builds
 over the intersection, not the union. A local filesystem adapter satisfies
-all five operations trivially; so does a zip file, a Postgres large-object
-table, or an IPFS pin set.
+all five operations trivially; so does a git working tree that commits each
+write, a zip file, a Postgres large-object table, or an IPFS pin set.
 
 ### 1.1 Keys
 
@@ -1083,9 +1083,10 @@ and "publish a subset" are the same operation.
 
 A gatekeeper, or a local tool holding the vault's credentials, MAY accept new
 objects: a note, an image, a PDF, any file. This is not part of the read
-surface (§12.3) and not part of any conformance level (§14.1) — the corpus has
-no write cases yet, and only the TypeScript implementation does it. An
-implementation that does MUST:
+surface (§12.3) and not part of any conformance level (§14.1); the corpus
+keys its cases by feature instead (`cases/store/creation.yaml`), and every
+implementation that creates objects runs them. An implementation that does
+MUST:
 
 1. **Create only.** Refuse a path that already exists, that collides with an
    existing one under §2.2, or that would make a file of a folder or a folder
@@ -1271,6 +1272,7 @@ conformance/
     links/*.yaml           content → expected edge list
     acl/*.yaml             principals + descriptors + request → decision
     interop/*.yaml         per-surface requirements and the equivalence questions
+    store/*.yaml           creating objects (§12.7): request → stored | refusal
   vaults/<name>/           whole vaults with expected index output
 ```
 

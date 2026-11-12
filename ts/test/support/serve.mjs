@@ -3,14 +3,13 @@
 // Not a *.test.mjs file on purpose: `npm test` globs those, and a helper that
 // exported from a test file would make every importer re-run it.
 
-import { fileURLToPath } from 'node:url';
 import { Vault } from '../../src/vault.mjs';
 import { FsTransport } from '../../src/transport/fs.mjs';
 import { Gatekeeper } from '../../src/gatekeeper.mjs';
 import { ALL_SURFACES } from '../../src/serve/router.mjs';
+import { corpusPath } from './spec.mjs';
 
-export const VAULT = fileURLToPath(
-  new URL('../../../conformance/vaults/minimal/vault', import.meta.url));
+export const VAULT = corpusPath('vaults/minimal/vault');
 
 export const VAULT_ID = '01JBQ7X8Z4N3VYK9M2T5HRWC6P';
 

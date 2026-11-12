@@ -10,12 +10,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { serve, VAULT_ID } from './support/serve.mjs';
 import YAML from 'yaml';
 import { OPERATIONS } from '../src/serve/ops.mjs';
 import { FAULTS } from '../src/serve/core.mjs';
 import { printSchema } from '../src/serve/graphql.mjs';
+import { corpusPath, protocolPath } from './support/spec.mjs';
 
 const PRINCIPALS = ['u:carter', 'u:reader', 'anonymous'];
 
@@ -262,7 +262,7 @@ test('equivalence: the operation table, the proto and the SDL stay in step', asy
   // Drift between the three descriptions of the same operations is the
   // failure mode of a repo with this many surfaces, and it is silent.
   const proto = await readFile(
-    fileURLToPath(new URL('../../protocol/basalt.proto', import.meta.url)), 'utf8');
+    protocolPath('basalt.proto'), 'utf8');
   const sdl = printSchema();
 
   const declared = [...proto.matchAll(/^\s*rpc (\w+)\(/gm)].map((m) => m[1]).sort();
@@ -288,15 +288,14 @@ test('equivalence: the interop corpus describes this implementation (§14.2)', a
   // The corpus is normative, so the spellings and the fault table live there
   // and this implementation is checked against them — not the other way
   // round. A surface renamed in code and not in conformance/ fails here.
-  const read = async (rel) => YAML.parse(await readFile(
-    fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
+  const read = async (rel) => YAML.parse(await readFile(corpusPath(rel), 'utf8'));
 
-  const manifest = await read('../../conformance/manifest.yaml');
+  const manifest = await read('manifest.yaml');
   const listed = manifest.suites.filter((x) => x.file.startsWith('cases/interop/'));
   assert.equal(listed.length, 2, 'the manifest does not inventory the interop suites');
 
-  const surfaces = await read('../../conformance/cases/interop/surfaces.yaml');
-  const equivalence = await read('../../conformance/cases/interop/equivalence.yaml');
+  const surfaces = await read('cases/interop/surfaces.yaml');
+  const equivalence = await read('cases/interop/equivalence.yaml');
 
   for (const entry of listed) {
     const file = entry.file.endsWith('surfaces.yaml') ? surfaces : equivalence;
@@ -339,7 +338,7 @@ test('equivalence: the shape invariants E8 pins (§13.3, §7.1, INTEROP §1.2)',
   // the Rust one side by side; the corpus owns the rule, both implementations
   // are held to it, and this test is the half that holds this one.
   const corpus = YAML.parse(await readFile(
-    fileURLToPath(new URL('../../conformance/cases/interop/equivalence.yaml', import.meta.url)),
+    corpusPath('cases/interop/equivalence.yaml'),
     'utf8'));
   const invariants = corpus.cases.find((c) => c.id === 'E8-shape-invariants').invariants;
   const checked = new Set();
