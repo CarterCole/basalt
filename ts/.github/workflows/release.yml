@@ -1,4 +1,6 @@
-# Pushing a tag `vX.Y.Z` publishes basalt-vault X.Y.Z to npm, with provenance.
+# Pushing a tag `vX.Y.Z` stages basalt-vault X.Y.Z on npm, with provenance. It
+# is not live until a maintainer approves it with 2FA: in the package's
+# "Staged Packages" tab on npmjs.com, or with `npm stage approve <stage-id>`.
 #
 # The tag has to match the version in package.json, and the whole suite has to
 # pass against the conformance corpus pinned in the `spec` submodule, so a tag
@@ -6,9 +8,13 @@
 # prerelease part (v1.1.0-rc.1) goes out under the `next` dist-tag, so it never
 # becomes what `npm install basalt-vault` fetches.
 #
-# Authentication is keyless (an npm Trusted Publisher for this repository and
-# workflow `release.yml`; it needs npm 11.5.1 or later). A repository secret
-# named NPM_TOKEN is used instead if one is set.
+# Authentication is keyless once the package has an npm Trusted Publisher for
+# this repository and workflow `release.yml`, allowed to `npm stage publish`
+# (npm's default; staging needs npm 11.15 or later). Until the package exists
+# there is nothing to attach one to, so the first release uses a repository
+# secret named NPM_TOKEN. It only has to stage, so it does not need to bypass
+# 2FA. Once the first version is live, add the Trusted Publisher and delete the
+# secret.
 name: release
 
 on:
@@ -55,15 +61,20 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
-      - name: A recent npm, for Trusted Publishing
-        run: npm install -g npm@^11.5.1
+      # 11.15 or later for `npm stage`. Not 12: 12.1.0 mangles a bin entry at
+      # pack time.
+      - name: A recent npm, for staged publishing
+        run: npm install -g npm@^11.20.0
       - run: npm ci
-      - name: Publish
+      - name: Stage for approval
         run: |
           case "$GITHUB_REF_NAME" in
             *-*) tag=next ;;
             *)   tag=latest ;;
           esac
-          npm publish --provenance --access public --tag "$tag"
+          npm stage publish --provenance --access public --tag "$tag"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # The placeholder is what actions/setup-node itself exports when no
+          # token is configured, so without an NPM_TOKEN secret npm falls back
+          # to the Trusted Publisher.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || 'XXXXX-XXXXX-XXXXX-XXXXX' }}
