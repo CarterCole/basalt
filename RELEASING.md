@@ -1,11 +1,22 @@
 # Releasing Basalt to crates.io, PyPI and npm
 
-Status: **prepared, nothing published.** Each registry gets one package,
-`basalt-vault`, holding the library, the `basalt` command and (in Rust and
-TypeScript) the MCP server. Each package has its own repository, and pushing a
-`vX.Y.Z` tag to that repository publishes that version. The repositories exist
-and are empty; the release commit, the split and the first tags have not
-happened.
+Status (2026-11-12): **PyPI is published; crates.io and npm are waiting on
+credentials.** Each registry gets one package, `basalt-vault`, holding the
+library, the `basalt` command and (in Rust and TypeScript) the MCP server. Each
+package has its own repository, and pushing a `vX.Y.Z` tag to that repository
+publishes that version.
+
+| Registry | Repository | State |
+|---|---|---|
+| PyPI | `python-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag (a Trusted Publisher; the first run of that workflow on GitHub) |
+| crates.io | `rust-basalt` | ready and tested, **not tagged**: needs a `CARGO_REGISTRY_TOKEN` secret for the first release |
+| npm | `ts-basalt` | ready and tested, **not tagged**: needs an `NPM_TOKEN` secret for the first release |
+
+The repositories were split out of this one with their history, carry the spec
+as a submodule pinned to `9a11585`, and include the security hardening from
+that commit (one critical and seven high audit findings, plus the YAML merge
+key rule of §13.4). The audit's twelve medium findings and its low findings are
+not addressed.
 
 Verified rather than assumed, from a copy of each package laid out as its own
 repository (package at the root, the spec in `spec/`):
@@ -15,9 +26,9 @@ repository (package at the root, the spec in `spec/`):
 | `cargo publish --dry-run -p basalt-vault` | passes; 36 files in a git checkout: library, `basalt` binary, README, LICENSE; no tests |
 | `npm publish --dry-run` in `ts/` | `basalt-vault-1.0.0.tgz`, 44 files, 1.7 MB, with its own README and LICENSE |
 | `uv build` + `twine check` in `python/` | both pass; wheel has LICENSE and `py.typed`, sdist leaves out tests, `spec/` and the workflow |
-| Rust / TypeScript / Python suites | 134 / 348 (12 skipped) / 376 passing |
+| Rust / TypeScript / Python suites | 145 / 373 (12 skipped) / 387 passing, at spec `9a11585` |
 | The §12.7 store cases | all pass in all three |
-| The three `release.yml` workflows | pass `actionlint`; every command in them was run locally. They have **not** run on GitHub yet: the first tag is their first real run |
+| The three `release.yml` workflows | pass `actionlint`. Python's has run on GitHub and published; the Rust and npm ones have **not** run yet, so their first tag is their first real run |
 
 ## 1. Shape: one package and one repository per language
 
@@ -92,7 +103,8 @@ What still differs, on purpose:
 
 ## 3. Release order
 
-Once, to set up:
+Once, to set up (steps 1 to 3 were done on 2026-11-12; step 4 is done for PyPI
+only):
 
 1. Commit everything in this repository, so the split starts from a commit,
    and push it, so the corpus commit the submodules pin exists on GitHub.
