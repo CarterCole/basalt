@@ -97,24 +97,6 @@ fn encode_segment(segment: &str) -> String {
     out
 }
 
-fn decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
-}
-
 pub fn uri_for(vault_id: &str, path: &str) -> String {
     let encoded: Vec<String> = path.split('/').map(encode_segment).collect();
     format!("basalt://{vault_id}/{}", encoded.join("/"))
@@ -136,7 +118,7 @@ fn path_from_uri(vault_id: &str, uri: &str) -> Result<String, RpcError> {
             format!("resource belongs to another vault: {authority}"),
         ));
     }
-    Ok(decode(path))
+    Ok(super::rest::percent_decode(path))
 }
 
 fn mime_for(entry: Option<&Json>, media_type: &str) -> String {

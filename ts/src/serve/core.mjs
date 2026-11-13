@@ -34,6 +34,28 @@ export const mediaFor = (p) => MEDIA[(p.match(/\.[^.]+$/) ?? [''])[0].toLowerCas
   ?? 'application/octet-stream';
 
 /**
+ * Response headers for bytes an author supplied: a raw node, an asset.
+ *
+ * They are served from the origin every surface and the publish site share,
+ * so a stored SVG opened by its URL would otherwise be a document in that
+ * origin, running its script as whoever opened it. `sandbox` gives it an
+ * origin of its own and no script; `nosniff` keeps a browser from deciding
+ * the bytes are something else. An <img> or <object> that embeds the same
+ * bytes is not affected by either.
+ *
+ * A PDF is left out of the sandbox: Chrome will not run its viewer in a
+ * sandboxed document, and a PDF's own script never runs in the page's origin.
+ */
+export function authorBytesHeaders(mediaType) {
+  const headers = { 'x-content-type-options': 'nosniff' };
+  if (!/^application\/pdf\b/i.test(mediaType ?? '')) {
+    headers['content-security-policy'] =
+      "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+  }
+  return headers;
+}
+
+/**
  * One fault table for every surface (INTEROP §1.3).
  *
  * A denial has to mean the same thing in all of them, so each adapter looks

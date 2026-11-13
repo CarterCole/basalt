@@ -293,14 +293,19 @@ export function buildIndexes({ scanned, vaultId, sidecars = {}, folderRecords = 
   }
   const backlinksIndex = envelope('backlinks', vaultId, digest.root, { entries: backlinks });
 
-  const tagMap = {};
+  // A Map, not an object: a tag is whatever an author typed, and `#constructor`
+  // or `#__proto__` looked up on a plain object finds Object.prototype's own
+  // member instead of nothing, which made the whole pass throw.
+  const tagIds = new Map();
   for (const n of nodes) {
     for (const t of n.tags) {
       if (!n.id) continue;
-      (tagMap[t] ??= []).push(n.id);
+      if (!tagIds.has(t)) tagIds.set(t, new Set());
+      tagIds.get(t).add(n.id);
     }
   }
-  for (const k of Object.keys(tagMap)) tagMap[k] = sortUtf8([...new Set(tagMap[k])]);
+  const tagMap = Object.fromEntries(
+    [...tagIds].map(([tag, ids]) => [tag, sortUtf8([...ids])]));
   const tagsIndex = envelope('tags', vaultId, digest.root, { entries: tagMap });
 
   const digestIndex = envelope('digest', vaultId, digest.root, {
@@ -339,7 +344,15 @@ export function extractDataLinks(text, path) {
     try { doc = YAML.parse(text); } catch { return []; }
   }
   const out = [];
-  const walk = (value, keyName) => {
+  // Deeper than any real dataset, and far short of the stack: a file of
+  // 20,000 nested brackets is 40 KB and would otherwise end the index pass.
+  // Past this an object has no links at all, which is what the Rust and
+  // Python readers make of it (their parsers stop at the same depth), so the
+  // three still write the same index.
+  const MAX_DEPTH = 128;
+  const TOO_DEEP = Symbol('too deep');
+  const walk = (value, keyName, depth = 0) => {
+    if (depth >= MAX_DEPTH && value && typeof value === 'object') throw TOO_DEEP;
     if (typeof value === 'string') {
       const wiki = value.match(/^!?\[\[([^\[\]]+)\]\]$/);
       if (wiki) {
@@ -352,12 +365,17 @@ export function extractDataLinks(text, path) {
       }
       return;
     }
-    if (Array.isArray(value)) { for (const v of value) walk(v, keyName); return; }
+    if (Array.isArray(value)) { for (const v of value) walk(v, keyName, depth + 1); return; }
     if (value && typeof value === 'object') {
-      for (const [k, v] of Object.entries(value)) walk(v, k);
+      for (const [k, v] of Object.entries(value)) walk(v, k, depth + 1);
     }
   };
-  walk(doc, null);
+  try {
+    walk(doc, null);
+  } catch (err) {
+    if (err !== TOO_DEEP) throw err;
+    return [];
+  }
   return out;
 }
 

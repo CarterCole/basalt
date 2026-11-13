@@ -1214,6 +1214,12 @@ or aliases, and preserve existing key order, appending new keys at the end.
 Rewriting a human's YAML into canonical form would destroy their comments and
 layout, so the rules here are about not making a mess, not about determinism.
 
+A `<<` key is an ordinary key. The merge key is a YAML 1.1 type that 1.2 does
+not have, and an implementation MUST NOT apply it: readers that disagreed
+about it would disagree about what a note's `basalt` mapping holds, its `acl`
+included, and a store checks a new note with one reader on behalf of them all
+(§12.7).
+
 Comments MUST be preserved when an implementation edits a YAML file it did
 not author. An implementation that cannot preserve comments MUST refuse to
 rewrite the file and MUST report it, rather than silently stripping them.

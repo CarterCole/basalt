@@ -28,6 +28,16 @@ pub use crate::serve::router::{Request, Response};
 /// the mode belongs to the surface every protocol shares.
 pub use crate::serve::surface::Delivery;
 
+/// How much of an over-limit request body is read and thrown away before the
+/// fault is sent. Enough that a client a little over the limit has finished
+/// sending and reads the answer instead of a reset; bounded, so the amount of
+/// work is not the client's to choose.
+const DRAIN_CAP: u64 = 4 * crate::serve::router::MAX_BODY as u64;
+
+/// How long that drain waits on a read: a client that declares more than it
+/// sends still gets its answer.
+const DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Reduces a request to exactly one principal id (§12.1).
 ///
 /// How that happens is out of scope — session cookie, OIDC, signed token,
@@ -158,17 +168,27 @@ impl Gatekeeper {
             .get("content-length")
             .and_then(|l| l.parse::<usize>().ok())
             .unwrap_or(0);
-        let mut body = vec![0u8; declared.min(crate::serve::router::MAX_BODY)];
-        if !body.is_empty() {
-            reader.read_exact(&mut body)?;
-        }
-        if declared > crate::serve::router::MAX_BODY {
-            // Drain the rest so the connection closes cleanly, then let the
-            // router answer with the fault.
-            let mut sink = vec![0u8; declared - crate::serve::router::MAX_BODY];
-            let _ = reader.read_exact(&mut sink);
-            body = vec![0u8; crate::serve::router::MAX_BODY + 1];
-        }
+        let body = if declared > crate::serve::router::MAX_BODY {
+            // Drain some of it so the connection closes cleanly, then let the
+            // router answer with the fault. `declared` is the client's number
+            // and nothing is ever sized by it: a buffer that large is an
+            // allocation the client chose, and one of 2^63 bytes aborts the
+            // process. So the drain goes through a fixed buffer, stops at a
+            // fixed cap, and stops waiting for a client that sends less than
+            // it declared.
+            let _ = stream.set_read_timeout(Some(DRAIN_WAIT));
+            let _ = std::io::copy(
+                &mut reader.by_ref().take(DRAIN_CAP.min(declared as u64)),
+                &mut std::io::sink(),
+            );
+            vec![0u8; crate::serve::router::MAX_BODY + 1]
+        } else {
+            let mut body = vec![0u8; declared];
+            if !body.is_empty() {
+                reader.read_exact(&mut body)?;
+            }
+            body
+        };
 
         let (path, query) = match raw_target.split_once('?') {
             Some((p, q)) => (p.to_string(), parse_query(q)),

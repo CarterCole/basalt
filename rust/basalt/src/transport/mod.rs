@@ -100,6 +100,13 @@ pub enum TransportError {
     /// rather than retried: last-write-wins on a knowledge vault silently
     /// destroys work.
     PreconditionFailed(String),
+    /// The store would file the key under an existing folder spelled another
+    /// way — a filesystem that folds names further than §2.2 does, taking
+    /// `ſite/` for `Site/`. Both are key prefixes, each ending in `/`.
+    FolderAlias {
+        asked: String,
+        existing: String,
+    },
     Unsupported(&'static str),
     Backend(String),
 }
@@ -110,6 +117,12 @@ impl fmt::Display for TransportError {
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Key(e) => write!(f, "{e}"),
             Self::PreconditionFailed(k) => write!(f, "precondition failed for {k}"),
+            Self::FolderAlias { asked, existing } => {
+                write!(
+                    f,
+                    "{asked} is the same folder as {existing} on this filesystem"
+                )
+            }
             Self::Unsupported(c) => write!(f, "transport does not provide {c}"),
             Self::Backend(m) => write!(f, "{m}"),
         }

@@ -173,13 +173,17 @@ function firstH1(body) {
 export function withId(text, id, { title, createdBy } = {}) {
   const { raw, body } = splitFrontmatter(text);
   if (raw === null) {
-    const head = title ? `title: ${YAML.stringify(title).trimEnd()}\n` : '';
-    // Through the YAML writer, never by interpolation: these strings came from
-    // a client, and a newline in one must not become another frontmatter key.
-    const by = createdBy
-      ? YAML.stringify({ created_by: createdBy }).trimEnd().replace(/^/gm, '  ') + '\n'
-      : '';
-    return `---\nbasalt:\n  id: ${id}\n${by}${head}---\n${text}`;
+    // The whole block goes through the YAML writer as one document, never by
+    // interpolation: these strings came from a client. A multi-line title
+    // written after a hand-made `title: ` came out as a block scalar whose
+    // lines sat at column 0, so each became a frontmatter key of its own, and
+    // one of them could replace `basalt` (its id, its acl) after the store had
+    // already checked the note.
+    const block = {
+      basalt: { id, ...(createdBy ? { created_by: createdBy } : {}) },
+      ...(title ? { title } : {}),
+    };
+    return `---\n${YAML.stringify(block)}---\n${text}`;
   }
   const doc = YAML.parseDocument(raw);  // parseDocument retains comments
   const basalt = doc.get('basalt');

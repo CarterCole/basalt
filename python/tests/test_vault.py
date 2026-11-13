@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 
+from basalt import yamlio
 from basalt.canonical import canonical_json
-from basalt.frontmatter import is_ulid, with_id
-from basalt.indexer import EPOCH, tokenize
+from basalt.frontmatter import Note, is_ulid, parse_note, with_id
+from basalt.indexer import EPOCH, extract_data_links, tokenize
+from basalt.store import StoreFault, store_object
 from basalt.transport.local import LocalTransport
 from basalt.transport.memory import MemoryTransport
 from basalt.vault import EmptyIndexRefused, Vault, ulid
@@ -165,6 +167,80 @@ def test_malformed_frontmatter_never_fails_the_index_pass() -> None:
     assert by_path["Bad.md"]["errors"] == ["FRONTMATTER_PARSE"]
     assert by_path["Good.md"]["id"] == "01jbq100000000000000000001"
     assert len(indexes["nodes"]["entries"]) == 2
+
+
+def test_content_a_parser_chokes_on_never_fails_the_index_pass() -> None:
+    """§5.2 — and not only on a syntax error.
+
+    Each of these makes the YAML or JSON parser raise something other than
+    its own error type. Content is written before the reindex and a store
+    cannot delete, so one of them stored by a principal holding only
+    ``create_child`` used to end ``check``, ``tree``, ``serve`` and ``add``
+    for everyone.
+    """
+    hostile = {
+        "date.yaml": "when: 2024-13-45\n",  # ValueError: no such month
+        "int.yaml": "n: !!int abc\n",  # ValueError
+        "digits.yaml": "n: " + "9" * 5000 + "\n",  # ValueError: too long to convert
+        "deep.yaml": "a: " + "[" * 5000 + "]" * 5000 + "\n",  # RecursionError
+        "deep.json": "[" * 200_000 + "]" * 200_000,  # RecursionError
+        "digits.json": '{"see": "[[Hexes]]", "n": ' + "9" * 5000 + "}",  # ValueError
+        "nested.json": "[" * 5000 + '"[[Hexes]]"' + "]" * 5000,  # parses; the walk must stop
+        "loop.yaml": "a: &a ['[[Hexes]]', *a]\n",  # parses, to a list that holds itself
+    }
+    objects = {
+        "content/Notes/Hexes.md": "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# Hexagons\n",
+        "content/Notes/Date.md": "---\nwhen: 2024-13-45\n---\n# Body Survives\n",
+        "content/data/good.yaml": "see: '[[Hexes]]'\n",
+        # Bound by the sidecar, so that every one of them is scanned for links.
+        "meta/folders/data/entries.yaml": "entries:\n  good.yaml: {id: 01jbq100000000000000000002}\n"
+        + "".join(
+            f"  {name}: {{id: 01jbq1000000000000000001{i:02d}}}\n" for i, name in enumerate(hostile)
+        ),
+    }
+    objects.update({f"content/data/{name}": text for name, text in hostile.items()})
+
+    indexes = build(objects).reindex(generated=EPOCH)
+    by_path = {e["path"]: e for e in indexes["nodes"]["entries"]}
+    assert len(by_path) == len(hostile) + 3
+    assert all(by_path[f"data/{name}"]["id"] for name in hostile)
+    assert by_path["Notes/Date.md"]["title"] == "Body Survives"
+    assert by_path["Notes/Date.md"]["errors"] == ["FRONTMATTER_PARSE"]
+    # What cannot be parsed, or walked to its end, has no links; the rest do.
+    assert [e["from"] for e in indexes["links"]["entries"]] == ["01jbq100000000000000000002"]
+
+
+def test_the_walk_over_a_data_object_is_bounded() -> None:
+    """§9.4 — by depth, and by how often YAML aliases may repeat an edge.
+
+    Within the bounds a document indexes to what it always did: an aliased
+    container is not walked again, but each use of it still yields its edges.
+    """
+
+    def found(text: str, path: str = "d.yaml") -> list[tuple[str, str]]:
+        return [(e.kind, e.raw) for e in extract_data_links(text, path)]
+
+    def nested(depth: int) -> str:
+        return "[" * depth + '"[[Hexes]]"' + "]" * depth
+
+    assert found(nested(128), "d.json") == [("wiki", "Hexes")]
+    assert found(nested(129), "d.json") == []
+    assert found("a: " + nested(127)) == [("wiki", "Hexes")]
+    assert found("a: " + nested(128)) == []
+
+    shared = "base: &b {ref: Notes/Hexes.md, see: ['[[Hexes]]']}\nx: *b\ny: [*b, *b]\n"
+    assert found(shared) == [("md", "Notes/Hexes.md"), ("wiki", "Hexes")] * 4
+    # The same list is links under `refs` and plain strings under `names`.
+    assert found("names: &n [Notes/Hexes.md]\nrefs: *n\nalso: *n\n") == [("md", "Notes/Hexes.md")]
+
+    def bomb(leaf: str) -> str:
+        levels = "".join(f"a{i}: &a{i} [*a{i - 1}, *a{i - 1}]\n" for i in range(1, 41))
+        return f"a0: &a0 [{leaf}, {leaf}]\n{levels}"
+
+    # 2**41 edges if every alias were walked, or copied out.
+    assert found(bomb("'[[Hexes]]'")) == []
+    # Without links there is nothing to repeat, and nothing is walked twice.
+    assert found(bomb("x") + "see: '[[Hexes]]'\n") == [("wiki", "Hexes")]
 
 
 def test_unresolvable_ace_subject_is_reported(tmp_path: Path) -> None:
@@ -524,6 +600,170 @@ def test_written_indexes_are_canonical_bytes() -> None:
     stored = vault.t.objects["index/nodes.json"].decode("utf-8")  # type: ignore[attr-defined]
     assert stored == canonical_json(indexes["nodes"])
     assert stored.endswith("}\n")
+
+
+# --------------------------------------------------------------- storing
+#
+# The corpus holds §12.7's cases (test_store_conformance.py). These are the
+# ones it cannot: they turn on this implementation's two YAML loaders, and on
+# the filesystem the suite happens to run on.
+
+#: u:editor may create anywhere, and holds write_acl nowhere.
+STORE_VAULT = {
+    "content/Notes/Hexes.md": "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# Hexagons\n",
+    "principals/users.yaml": (
+        "users:\n  - {id: 'u:carter', status: active}\n  - {id: 'u:editor', status: active}\n"
+    ),
+    "meta/acl/acl.yaml": (
+        "folder:\n  owner: 'u:carter'\n  dacl:\n"
+        "    - {type: allow, subject: everyone, rights: [list, traverse], flags: [ci]}\n"
+        "    - {type: allow, subject: 'u:editor', rights: [create_child], flags: [ci]}\n"
+    ),
+}
+GRANT_ALL = "{dacl: [{type: allow, subject: everyone, rights: [read, write_acl], flags: []}]}"
+
+
+def test_store_refuses_frontmatter_the_reader_cannot_parse() -> None:
+    """§12.7 item 2 — ``create_child`` must not be able to plant an ACL.
+
+    The reader's loader fails on each of these blocks and reports no
+    ``basalt.acl``; the loader that stamps the id reads them, and used to
+    write the ACL back for another implementation's reader to honour.
+    """
+    vault = build(STORE_VAULT)
+    vault.reindex(write=True)
+    assert vault.can("u:editor", "Notes/", ["create_child"]).allowed
+    assert not vault.can("u:editor", "Notes/", ["write_acl"]).allowed
+    before = dict(vault.t.objects)  # type: ignore[attr-defined]
+
+    for unreadable in ("foo: !custom bar", "? {a: b}\n: c", "when: 2024-13-45", "n: !!int abc"):
+        text = f"---\n{unreadable}\nbasalt:\n  acl: {GRANT_ALL}\n---\nhello\n"
+        assert parse_note(text).acl is None, "the reader sees no ACL to ask write_acl for"
+        for principal in ("u:editor", None):  # the operator's note is refused too
+            with pytest.raises(StoreFault) as err:
+                store_object(vault, path="Notes/New.md", principal=principal, data=text.encode())
+            assert (err.value.code, err.value.status) == ("bad_request", 400), unreadable
+            assert "the frontmatter is not valid YAML" in err.value.detail
+    assert vault.t.objects == before, "nothing was written"  # type: ignore[attr-defined]
+
+
+def test_a_merge_key_is_an_ordinary_key_to_the_reader() -> None:
+    """§13.4 — YAML 1.2 has no merge key, so ``<<`` adds nothing to its mapping.
+
+    The TypeScript and Rust readers take ``<<`` for a plain key. When this one
+    applied it, a note stored through either of them — whose stores see no
+    ``basalt.acl`` in ``basalt: {<<: *x}`` and so ask for no ``write_acl`` —
+    was read here as carrying the ACL that ``x`` held.
+    """
+    assert yamlio.load("a: &a {x: 1}\nb: {<<: *a, y: 2}\n<<: *a\n") == {
+        "a": {"x": 1},
+        "b": {"<<": {"x": 1}, "y": 2},
+        "<<": {"x": 1},
+    }
+
+    planted = (
+        f"---\nx: &x {{acl: {GRANT_ALL}}}\n"
+        "basalt:\n  <<: *x\n  id: 01jbq100000000000000000002\n---\nhello\n"
+    )
+    note = parse_note(planted)
+    assert (note.id, note.acl, note.errors) == ("01jbq100000000000000000002", None, [])
+
+    # As another implementation's store would have left it: in the vault,
+    # with no write_acl ever asked of whoever stored it.
+    vault = build({**STORE_VAULT, "content/Notes/Planted.md": planted})
+    vault.reindex()
+    assert not vault.can("u:editor", "Notes/Planted.md", ["write_acl"]).allowed
+    assert not vault.can("u:editor", "Notes/Planted.md", ["read"]).allowed
+
+    # The same ACL written plainly is still an ACL: only the merge is gone.
+    plain = f"---\nbasalt:\n  id: 01jbq100000000000000000003\n  acl: {GRANT_ALL}\n---\nhello\n"
+    vault = build({**STORE_VAULT, "content/Notes/Plain.md": plain})
+    vault.reindex()
+    assert vault.can("u:editor", "Notes/Plain.md", ["write_acl"]).allowed
+
+
+def test_nested_merge_keys_cost_nothing_to_read() -> None:
+    """Ten aliases merged at each of eleven levels is 10^11 mappings to
+    flatten, and a few hundred bytes to write. Read as plain keys it is
+    twelve small mappings."""
+    bomb = "a0: &a0 {k: v}\n" + "".join(
+        f"a{i}: &a{i}\n  <<: [{', '.join([f'*a{i - 1}'] * 10)}]\n" for i in range(1, 12)
+    )
+    loaded = yamlio.load(bomb)
+    assert len(loaded) == 12
+    assert parse_note(f"---\n{bomb}---\n# Body\n").title == "Body"
+
+
+def test_store_asks_write_acl_of_the_block_it_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§12.7 item 2, decided on the document that is written.
+
+    Independent of the test above: here the reader's parse of what arrived
+    reports no ACL and no error at all, as a loader that disagreed with the
+    writer's would, and the ACL must still not be stored without
+    ``write_acl``.
+    """
+    vault = build(STORE_VAULT)
+    vault.reindex(write=True)
+    monkeypatch.setattr("basalt.store.parse_note", lambda text, path="": Note())
+
+    text = f"---\nbasalt:\n  acl: {GRANT_ALL}\n---\nhello\n"
+    aliased = f"---\nx: &x\n  acl: {GRANT_ALL}\nbasalt:\n  <<: *x\n---\nhello\n"
+    for planted in (text.encode(), aliased.encode()):
+        with pytest.raises(StoreFault) as err:
+            store_object(vault, path="Notes/Planted.md", principal="u:editor", data=planted)
+        assert (err.value.code, err.value.status) == ("forbidden", 403)
+    assert "content/Notes/Planted.md" not in vault.t.objects  # type: ignore[attr-defined]
+
+    # The operator is not subject to §8, and a note with no ACL needs no more
+    # than create_child.
+    plain = b"---\ntitle: Plain\n---\nhello\n"
+    store_object(vault, path="Notes/Operator.md", principal=None, data=text.encode())
+    store_object(vault, path="Notes/Plain.md", principal="u:editor", data=plain)
+    monkeypatch.undo()
+    stored = vault.t.objects  # type: ignore[attr-defined]
+    assert parse_note(stored["content/Notes/Operator.md"].decode()).acl is not None
+    assert parse_note(stored["content/Notes/Plain.md"].decode()).acl is None
+
+
+def test_store_refuses_a_folder_the_filesystem_folds_onto_another(tmp_path: Path) -> None:
+    """§2.2 — its fold is NFC and lowercase; a case-insensitive filesystem's is wider.
+
+    ``Site/`` spelled with a long s (U+017F) is a new folder to the collision
+    rule, so it is the root's inheritable ACL that is evaluated. On APFS it is
+    the protected ``Site/`` that the bytes would land in.
+    """
+    root = tmp_path / "vault"
+    files = {
+        "basalt.yaml": MANIFEST,
+        "principals/users.yaml": STORE_VAULT["principals/users.yaml"],
+        "meta/acl/acl.yaml": STORE_VAULT["meta/acl/acl.yaml"],
+        "meta/acl/Site/acl.yaml": (
+            "folder:\n  owner: 'u:carter'\n  protected: true\n  dacl:\n"
+            "    - {type: allow, subject: 'u:carter', rights: [full_control], flags: [ci, oi]}\n"
+            "    - {type: allow, subject: everyone, rights: [read, list, traverse], flags: [ci, oi]}\n"
+        ),
+        "content/Site/Home.md": "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# Home\n",
+    }
+    for key, text in files.items():
+        (root / key).parent.mkdir(parents=True, exist_ok=True)
+        (root / key).write_text(text, encoding="utf-8")
+    long_s = "\u017fite"
+    if not (root / "content" / long_s).is_dir():
+        pytest.skip("needs a case-insensitive filesystem that folds U+017F onto s (APFS does)")
+
+    vault = Vault(LocalTransport(root)).load()
+    vault.reindex(write=True)
+    assert not vault.can("u:editor", "Site/", ["create_child"]).allowed
+    assert vault.can("u:editor", f"{long_s}/", ["create_child"]).allowed, "judged as a new folder"
+
+    for path in (f"{long_s}/Planted.md", f"{long_s}/Deep/Planted.md", f"{long_s}/planted.png"):
+        with pytest.raises(StoreFault) as err:
+            store_object(vault, path=path, principal="u:editor", data=b"# Planted\n")
+        assert (err.value.code, err.value.status) == ("conflict", 409)
+        assert err.value.detail == f"{long_s}/ is the same folder as Site/ on this filesystem"
+    assert sorted(p.name for p in (root / "content").iterdir()) == ["Site"]
+    assert sorted(p.name for p in (root / "content" / "Site").iterdir()) == ["Home.md"]
+    assert not (root / "meta" / "folders").exists(), "no sidecar for an asset that was refused"
 
 
 # --------------------------------------------------------------- manifest

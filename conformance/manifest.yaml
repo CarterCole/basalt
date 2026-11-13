@@ -10,7 +10,7 @@ suites:
   - {file: cases/keys/validation.yaml,        level: L0, spec: "1.1", cases: 15}
   - {file: cases/paths/collisions.yaml,       level: L1, spec: "2.2", cases: 4}
   - {file: cases/paths/folders.yaml,          level: L1, spec: "2.1", cases: 3}
-  - {file: cases/frontmatter/parsing.yaml,    level: L1, spec: "5.2", cases: 11}
+  - {file: cases/frontmatter/parsing.yaml,    level: L1, spec: "5.2", cases: 12}
   - {file: cases/links/extraction.yaml,       level: L2, spec: "9.1", cases: 4}
   - {file: cases/links/resolution.yaml,       level: L2, spec: "9.2", cases: 13}
   - {file: cases/acl/evaluation.yaml,         level: L3, spec: "8.4", cases: 24}

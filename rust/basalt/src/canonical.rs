@@ -267,6 +267,7 @@ pub fn parse_json(text: &str) -> Result<Json, String> {
     let mut p = Parser {
         b: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     p.ws();
     let v = p.value()?;
@@ -277,9 +278,19 @@ pub fn parse_json(text: &str) -> Result<Json, String> {
     Ok(v)
 }
 
+/// How deep arrays and objects may nest before a document is refused.
+///
+/// The parser recurses once per level, and its input is whatever a client
+/// posts to `/mcp` or a store holds under `index/`: without a bound, a few
+/// kilobytes of `[` overflow the stack, which no caller can catch — the
+/// process aborts. No index object or JSON-RPC message comes near this depth.
+pub const MAX_DEPTH: usize = 128;
+
 struct Parser<'a> {
     b: &'a [u8],
     i: usize,
+    /// How many arrays and objects enclose the value being read.
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -305,10 +316,26 @@ impl<'a> Parser<'a> {
             Some(b't') => self.lit("true", Json::Bool(true)),
             Some(b'f') => self.lit("false", Json::Bool(false)),
             Some(b'"') => Ok(Json::Str(self.string()?)),
-            Some(b'[') => self.array(),
-            Some(b'{') => self.object(),
+            Some(b'[') => self.nested(Self::array),
+            Some(b'{') => self.nested(Self::object),
             Some(_) => self.number(),
         }
+    }
+
+    /// Read one array or object, refusing it beyond [`MAX_DEPTH`] — an
+    /// ordinary parse error, so every caller handles it as it handles any
+    /// other malformed document.
+    fn nested(&mut self, read: fn(&mut Self) -> Result<Json, String>) -> Result<Json, String> {
+        if self.depth == MAX_DEPTH {
+            return Err(format!(
+                "nested deeper than {MAX_DEPTH} levels at byte {}",
+                self.i
+            ));
+        }
+        self.depth += 1;
+        let v = read(self);
+        self.depth -= 1;
+        v
     }
 
     fn lit(&mut self, word: &str, v: Json) -> Result<Json, String> {

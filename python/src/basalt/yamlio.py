@@ -21,7 +21,29 @@ import io
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.constructor import SafeConstructor
+
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+_STR_TAG = "tag:yaml.org,2002:str"
+
+
+class _PlainMergeKeys(SafeConstructor):
+    """The safe constructor, reading ``<<`` as the key it is.
+
+    A merge key is a YAML 1.1 type. §13.4 reads YAML 1.2, which has none, and
+    the TypeScript and Rust readers take ``<<`` for an ordinary key. Applying
+    it here made this the one reader that saw ``basalt: {<<: *x}`` as carrying
+    whatever ``x`` held: a note stored through another implementation, whose
+    store had seen no ``basalt.acl`` in it and so asked for no ``write_acl``,
+    arrived here with an ACL. Readers that disagree about what a file says
+    disagree about who may read it, so this one says what the others say.
+    It also takes away the merge's cost, which nested merges made exponential.
+    """
+
+    def flatten_mapping(self, node: Any) -> Any:
+        for key_node, _value_node in node.value:
+            if key_node.tag == _MERGE_TAG:
+                key_node.tag = _STR_TAG
 
 
 class CommentsWouldBeLost(RuntimeError):
@@ -34,6 +56,7 @@ class CommentsWouldBeLost(RuntimeError):
 
 def _reader() -> YAML:
     y = YAML(typ="safe")
+    y.Constructor = _PlainMergeKeys
     y.allow_duplicate_keys = True  # read permissively (§13.4)
     return y
 
@@ -56,7 +79,12 @@ def load(text: str, fallback: Any = None) -> Any:
     """
     try:
         value = _reader().load(text)
-    except YAMLError:
+    except Exception:
+        # Not YAMLError alone. The constructor lets a ValueError out for a
+        # date that is no date (`2024-13-45`), `!!int abc` or an integer of
+        # 5,000 digits, and the parser a RecursionError for nesting deeper
+        # than the interpreter's stack. Whatever one file's content can raise
+        # is that file being malformed, never a failed pass (§5.2).
         return fallback
     return fallback if value is None else value
 
@@ -89,7 +117,9 @@ def edit(text: str, mutate: Any) -> str:
     """
     try:
         doc = load_preserving(text)
-    except YAMLError as err:
+    except Exception as err:
+        # As in load(): the round-trip parser raises more than YAMLError on
+        # the same content, and a caller must get the one refusal it handles.
         raise CommentsWouldBeLost(f"cannot round-trip this YAML: {err}") from err
     result = mutate(doc)
     return dump(result if result is not None else doc)

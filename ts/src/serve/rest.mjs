@@ -7,7 +7,7 @@
 // serves at /api/v1/openapi.json.
 
 import { canonicalJson } from '../canonical.mjs';
-import { Fault } from './core.mjs';
+import { Fault, authorBytesHeaders } from './core.mjs';
 
 const API = '/api/v1';
 
@@ -222,7 +222,11 @@ export async function handleRest(surface, principal, req, res, { baseUrl, send }
         send(res, 304, '', { etag, 'content-type': type });
         return true;
       }
-      send(res, 200, bytes, { etag, 'content-type': type });
+      send(res, 200, bytes, {
+        etag, 'content-type': type,
+        // `out.bytes` is a node's own content, not a document this surface wrote.
+        ...(out.bytes ? authorBytesHeaders(type) : {}),
+      });
       return true;
     } catch (err) {
       const f = err instanceof Fault ? err : new Fault('internal', err.message);

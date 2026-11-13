@@ -19,6 +19,7 @@ import pytest
 
 from basalt.keys import INDEX
 from basalt.store import Provenance, store_object
+from basalt.transport import FolderAliased
 from basalt.transport.git import GitError, GitTransport
 from basalt.vault import Vault
 
@@ -139,6 +140,19 @@ def test_a_key_gitignore_excludes_is_stored_but_not_committed(tmp_path: Path) ->
     put(v, "Notes/Idea.md", "# Idea\n")
     assert (root / "index/nodes.json").exists()
     assert changed(top) == ["content/Notes/Idea.md"]
+
+
+def test_a_folder_the_filesystem_spells_another_way_is_refused_and_not_committed(tmp_path: Path) -> None:
+    """The git store writes through the local transport, so its guard holds here."""
+    top, root = repo_with_vault(tmp_path)
+    if not (root / "content/notes").is_dir():
+        pytest.skip("needs a case-insensitive filesystem (the macOS and Windows default)")
+    t = GitTransport(root)
+    with pytest.raises(FolderAliased):
+        t.put("content/notes/Planted.md", b"# planted\n", if_match=None)
+    assert not (root / "content/Notes/Planted.md").exists()
+    assert subjects(top, 1) == ["Import the vault"]
+    assert git(top, "status", "--porcelain") == ""
 
 
 def test_reindex_and_mint_are_a_commit_each_and_only_when_something_changed(tmp_path: Path) -> None:

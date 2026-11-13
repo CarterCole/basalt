@@ -561,6 +561,13 @@ postings file built from the public subset only. `--with-vault` additionally
 emits a re-servable filtered vault, because §12.6 makes an export a smaller
 vault rather than a different kind of thing.
 
+A static host also sends no headers of ours, so a file a browser would open
+as a page and run is left out of the export: `.html`, `.xml` and their kin,
+and any SVG that holds more than a drawing (script, links, markup from
+another namespace, an editor's own metadata elements). The export names each
+file it leaves out. `basalt serve` still serves them, as downloads or in a
+sandbox with no script and an origin of their own.
+
 **What copying the vault directory instead would do:** publish `index/`, which
 is built as `system` and therefore knows every private node — every edge into
 them, every title. The site would look correct. This is the one mistake in

@@ -18,6 +18,18 @@ const IMAGE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.svg', '.bmp', '.ico',
 ]);
 
+/**
+ * URL schemes a link may not use. `javascript:` and `vbscript:` run in the
+ * page; `data:` and `blob:` open a document the author wrote. A static export
+ * has no Content-Security-Policy to fall back on, so these are refused here.
+ */
+const SCRIPT_SCHEMES = new Set(['javascript', 'vbscript', 'data', 'blob']);
+
+/** Percent-decode, keeping the text as written when an escape is malformed. */
+function decodeLoose(s) {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
 export function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -163,6 +175,16 @@ export function createRenderer(ctx) {
     renderer: {
       // Escape author HTML instead of emitting it.
       html(token) { return escapeHtml(token.raw ?? token.text ?? ''); },
+      // After an opening <script>, <style>, <pre> or <textarea>, marked hands
+      // the text that follows through unescaped (`escaped: true`), on the
+      // assumption that the tag itself was emitted. It was not: `html` above
+      // turned it into text, so what follows is text too. Without this, a
+      // note saying `<script> <img/src=x onerror=…>` put a live tag on the
+      // page. Everything else falls through to marked's own escaping.
+      text(token) {
+        if (token.tokens) return false;
+        return token.escaped ? escapeHtml(token.text ?? '') : false;
+      },
       heading({ tokens, depth }) {
         const text = this.parser.parseInline(tokens);
         const plain = stripTags(text);
@@ -173,15 +195,20 @@ export function createRenderer(ctx) {
       },
       link({ href, title, tokens }) {
         const text = this.parser.parseInline(tokens);
-        const external = /^[a-z][a-z0-9+.-]*:/i.test(href);
-        if (external) {
+        const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1].toLowerCase();
+        // A link that would run script or open a document of the author's
+        // making in this origin is shown as its text, not as a link.
+        if (scheme && SCRIPT_SCHEMES.has(scheme)) {
+          return `<span class="lk lk-dead" title="This kind of link is not allowed">${text}</span>`;
+        }
+        if (scheme) {
           return `<a class="lk lk-ext" href="${escapeHtml(href)}"` +
             ` rel="noopener noreferrer nofollow" target="_blank"` +
             `${title ? ` title="${escapeHtml(title)}"` : ''}>${text}</a>`;
         }
         // A relative markdown link is resolved through the same path as a
         // wikilink, so both agree with the index.
-        const c = classify(decodeURIComponent(href));
+        const c = classify(decodeLoose(href));
         if (c.kind === 'ok') {
           return `<a class="lk lk-note" href="${hrefFor(c.path, c.anchor)}">${text}</a>`;
         }
@@ -191,7 +218,7 @@ export function createRenderer(ctx) {
         return `<span class="lk lk-dead" title="This note does not exist yet">${text}</span>`;
       },
       image({ href, title, text }) {
-        const c = classify(decodeURIComponent(href));
+        const c = classify(decodeLoose(href));
         if (c.kind !== 'ok') {
           return `<span class="lk lk-dead">${escapeHtml(text || href)}</span>`;
         }

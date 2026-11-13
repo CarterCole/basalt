@@ -306,6 +306,40 @@ pub fn resolve_rooted(target: &str) -> Option<String> {
     normalize_segments(target)
 }
 
+/// Percent-decode a path or link target.
+///
+/// An escape is `%` and two ASCII hex digits, read as bytes. Not as a `str`
+/// slice: the two bytes after a `%` need not end on a character boundary
+/// (`%a€`), and slicing there panics — which, for a link in a note, is a
+/// vault no command can open. Nor through `from_str_radix`, which takes a
+/// sign and would read `%+f` as an escape.
+///
+/// A `%` that starts no escape is kept as written when `lenient`, and
+/// otherwise fails the whole decode. None for that, and when the decoded
+/// bytes are not UTF-8; each caller has its own fallback.
+pub fn percent_decode(s: &str, lenient: bool) -> Option<String> {
+    let hex = |b: Option<&u8>| b.and_then(|&c| (c as char).to_digit(16)).map(|d| d as u8);
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            match (hex(b.get(i + 1)), hex(b.get(i + 2))) {
+                (Some(hi), Some(lo)) => {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                    continue;
+                }
+                _ if !lenient => return None,
+                _ => {}
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
 fn normalize_segments(s: &str) -> Option<String> {
     let mut out: Vec<&str> = Vec::new();
     for seg in s.split('/') {

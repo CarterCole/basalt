@@ -233,6 +233,111 @@ fn run_store_case(c: &Yaml) -> Result<(), String> {
     Ok(())
 }
 
+/// §2.2 folds names with NFC and lowercase, and the collision check is built
+/// on that fold. A case-insensitive filesystem folds further — APFS and NTFS
+/// take `ſite` (U+017F, long s) for `Site` — so a path spelled that way passed
+/// as a folder nobody had made yet, was authorized as one, and was then
+/// written into the existing folder the writer has no right on. The
+/// filesystem transport now refuses the write, and the refusal is the
+/// conflict any other §2.2 collision gets.
+///
+/// Not a corpus case: an object store does not alias names, so what this
+/// asserts is true only of a filesystem that does.
+#[test]
+fn a_store_cannot_reach_a_protected_folder_through_filesystem_case_folding() {
+    let dir = Scratch(std::env::temp_dir().join(format!(
+        "basalt-store-alias-{}-{}",
+        std::process::id(),
+        basalt::ulid()
+    )));
+    let root = &dir.0;
+    let write = |key: &str, body: &str| {
+        let p = root.join(key);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    };
+    write(
+        "content/Site/Home.md",
+        "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# Home\n",
+    );
+    if !root.join("content/ſite").exists() {
+        eprintln!("skipped: {} does not fold ſite onto Site", root.display());
+        return;
+    }
+    write(
+        "basalt.yaml",
+        "basalt: 1\nvault:\n  id: 01JBQ7X8Z4N3VYK9M2T5HRWC6P\n  title: Aliases\npublish:\n  audience: gated\n",
+    );
+    write(
+        "principals/users.yaml",
+        "users:\n  - {id: u:carter, status: active}\n  - {id: u:editor, status: active}\n",
+    );
+    // The editor may add anywhere the root's grant reaches ...
+    write(
+        "meta/acl/acl.yaml",
+        "folder:\n  owner: u:carter\n  dacl:\n    \
+         - {type: allow, subject: everyone, rights: [traverse, list], flags: [ci]}\n    \
+         - {type: allow, subject: u:editor, rights: [read, create_child], flags: [ci, oi]}\n",
+    );
+    // ... which is not into Site/: it is protected, so nothing is inherited.
+    write(
+        "meta/acl/Site/acl.yaml",
+        "folder:\n  owner: u:carter\n  protected: true\n  dacl:\n    \
+         - {type: allow, subject: everyone, rights: [read, list, traverse], flags: [oi]}\n",
+    );
+
+    let mut v = Vault::open(Box::new(FsTransport::new(root))).expect("vault opens");
+    v.reindex(true).expect("reindex");
+    let mut attempt = |path: &str| {
+        store_object(
+            &mut v,
+            &StoreRequest {
+                principal: Some("u:editor"),
+                path,
+                bytes: b"# Planted\n",
+                title: None,
+                alt: None,
+                provenance: None,
+                reindex: true,
+                max_bytes: None,
+            },
+        )
+    };
+
+    let direct = attempt("Site/Planted.md").expect_err("Site/ is closed to the editor");
+    assert_eq!((direct.code, direct.status), ("forbidden", 403));
+    attempt("Drafts/Mine.md").expect("a folder of the editor's own is open to them");
+
+    let aliased = attempt("ſite/Planted.md").expect_err("ſite/ is Site/ on this filesystem");
+    assert_eq!(
+        (aliased.code, aliased.status),
+        ("conflict", 409),
+        "{aliased}"
+    );
+    assert_eq!(
+        aliased.detail,
+        "ſite/ is the same folder as Site/ on this filesystem"
+    );
+    // Deeper, and for a file that is not a note (so a sidecar would follow).
+    let deeper = attempt("ſite/Sub/planted.png").expect_err("still Site/");
+    assert_eq!((deeper.code, deeper.status), ("conflict", 409), "{deeper}");
+
+    let mut site: Vec<String> = std::fs::read_dir(root.join("content/Site"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    site.sort();
+    assert_eq!(
+        site,
+        ["Home.md"],
+        "nothing was planted in the protected folder"
+    );
+    assert!(
+        !root.join("meta/folders/Site").exists(),
+        "and no sidecar was written for it"
+    );
+}
+
 #[test]
 fn store_corpus() {
     let doc = load("cases/store/creation.yaml");

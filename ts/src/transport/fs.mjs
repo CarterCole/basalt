@@ -28,6 +28,46 @@ export class FsTransport {
     return p;
   }
 
+  /**
+   * Refuse a key whose folders the filesystem would file under a different
+   * spelling.
+   *
+   * §2.2 folds names with NFC and lowercase, and the ACL is evaluated for the
+   * path as written. A case-insensitive filesystem (the macOS default, NTFS)
+   * folds further: `ſite/` (long s) opens `Site/`. Without this check a
+   * writer allowed to make a new top-level folder could write into an
+   * existing one it has no right on, by spelling it in a way only the
+   * filesystem considers the same. For every folder of the key that already
+   * exists, its parent's listing must hold that exact name.
+   */
+  async #refuseAliasedFolders(key) {
+    let dir = this.root;
+    for (const seg of key.split('/').slice(0, -1)) {
+      const next = path.join(dir, seg);
+      let st;
+      try {
+        st = await fs.stat(next);
+      } catch (err) {
+        // Nothing there: mkdir creates it as spelled, and so everything below.
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return;
+        throw err;
+      }
+      const names = await fs.readdir(dir);
+      if (!names.some((n) => n.normalize('NFC') === seg)) {
+        let existing = null;
+        for (const n of names) {
+          const other = await fs.stat(path.join(dir, n)).catch(() => null);
+          if (other && other.ino === st.ino && other.dev === st.dev) { existing = n; break; }
+        }
+        const err = new Error(
+          `${seg}/ is the same folder as ${existing ?? 'an existing one'}/ on this filesystem`);
+        err.code = 'KEY_ALIASED';
+        throw err;
+      }
+      dir = next;
+    }
+  }
+
   async get(key) {
     try {
       return await fs.readFile(this.#resolve(key));
@@ -48,6 +88,7 @@ export class FsTransport {
         throw err;
       }
     }
+    await this.#refuseAliasedFolders(key);
     await fs.mkdir(path.dirname(p), { recursive: true });
     // Write to a temp file and rename, so a reader never sees a half-written
     // object — §1 promises read-after-write for a single key.

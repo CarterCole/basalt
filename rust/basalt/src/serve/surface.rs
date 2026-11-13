@@ -12,7 +12,7 @@
 //! copying it will not be.
 
 use crate::canonical::Json;
-use crate::keys::{basename, parent_folder, path_to_key};
+use crate::keys::{basename, parent_folder, path_to_key, CONTENT, MAX_KEY_BYTES};
 use crate::order::{hex, sort_utf8_by};
 use crate::transport::Capability;
 use crate::vault::{IndexState, Vault};
@@ -198,8 +198,16 @@ impl Surface {
 
     /// Reject a withheld path as not-found, never forbidden: a 403 would
     /// confirm that `principals/users.yaml` is there, which is half the answer.
+    ///
+    /// And a path too long to be a key. §1.1 bounds a key at 1024 bytes and
+    /// every content key is `content/` + path, so a longer path names neither
+    /// an object nor a folder (§2.1: a folder is only ever implied by a key
+    /// beneath it). That is answered here, before any §8 evaluation, because
+    /// evaluation walks the chain of every ancestor folder and its cost grows
+    /// with the cube of the depth: a 16 KB path of two-byte segments held the
+    /// vault lock, and every other request behind it, for 24 seconds.
     fn guard(path: &str) -> Result<(), Fault> {
-        if Self::withheld(path) {
+        if Self::withheld(path) || CONTENT.len() + path.len() > MAX_KEY_BYTES {
             return Err(Fault::NotFound);
         }
         Ok(())

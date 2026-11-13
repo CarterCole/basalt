@@ -136,7 +136,11 @@ export function extractLinks(text) {
     if (!isExternal) {
       const hash = href.indexOf('#');
       if (hash !== -1) {
-        anchor = nfc(decodeURIComponent(href.slice(hash + 1))) || null;
+        // A malformed escape is kept as written, like the target below: one
+        // bad link must not end the index pass for the whole vault.
+        anchor = href.slice(hash + 1);
+        try { anchor = decodeURIComponent(anchor); } catch { /* keep raw */ }
+        anchor = nfc(anchor) || null;
         target = href.slice(0, hash);
       }
       try { target = decodeURIComponent(target); } catch { /* keep raw */ }

@@ -100,3 +100,26 @@ cases:
       publish: false
       aliases: ["Alt Name"]
     note: §5.2 — protocol keys live under `basalt`, so top-level user keys are safe.
+
+  - name: merge-key-is-an-ordinary-key
+    content: |
+      ---
+      shared: &shared
+        title: From The Merge
+        tags: [merged]
+      settings: &settings
+        publish: false
+        aliases: [Merged Alias]
+      <<: *shared
+      basalt:
+        <<: *settings
+        id: 01jbq7x8z4n3vyk9m2t5hrwc6p
+      ---
+      # From The Heading
+    expect:
+      id: "01jbq7x8z4n3vyk9m2t5hrwc6p"
+      title: "From The Heading"
+      tags: []
+      publish: true
+      aliases: []
+    note: §13.4 — YAML 1.2 has no merge key, so `<<` adds nothing to the mapping it sits in. Readers that disagreed would disagree about `basalt.acl`.

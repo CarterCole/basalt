@@ -327,22 +327,11 @@ pub fn problem(fault: Fault, detail: Option<&str>) -> Json {
     out.build()
 }
 
+/// Percent-decode a request path or query value. A `%` that starts no escape
+/// is kept as written, and a decode that is not UTF-8 leaves the input as it
+/// arrived: either way the result names no object, and the route answers 404.
 pub fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+    crate::keys::percent_decode(s, true).unwrap_or_else(|| s.to_string())
 }
 
 // ------------------------------------------------------------------ OpenAPI

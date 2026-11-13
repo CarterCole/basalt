@@ -922,9 +922,19 @@ impl Vault {
             return Vec::new();
         };
 
-        let mut scores: BTreeMap<String, i64> = BTreeMap::new();
+        // Each distinct term is looked up once and weighted by how often the
+        // query says it. The scores are the ones a lookup per occurrence
+        // gives, but every posting costs an ACL evaluation under the vault
+        // lock, and a query of one word two thousand times must not buy two
+        // thousand of them.
+        let mut asked: BTreeMap<String, i64> = BTreeMap::new();
         for tok in crate::indexer::tokenize(query) {
-            let Some(Json::Array(postings)) = terms.get(&tok) else {
+            *asked.entry(tok).or_insert(0) += 1;
+        }
+
+        let mut scores: BTreeMap<String, i64> = BTreeMap::new();
+        for (tok, times) in &asked {
+            let Some(Json::Array(postings)) = terms.get(tok) else {
                 continue;
             };
             for p in postings {
@@ -941,7 +951,7 @@ impl Vault {
                     Some(Json::Int(i)) => *i,
                     _ => 0,
                 };
-                *scores.entry(id.to_string()).or_insert(0) += tf;
+                *scores.entry(id.to_string()).or_insert(0) += tf * times;
             }
         }
         let mut hits: Vec<SearchHit> = scores

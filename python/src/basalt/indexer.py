@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import regex as re2
@@ -612,6 +612,19 @@ _LINK_KEYS = frozenset({"link", "links", "ref", "refs", "href", "url"})
 _DATA_WIKI_RE = re2.compile(r"^!?\[\[([^\[\]]+)\]\]$")
 _DATA_SCHEME_RE = re2.compile(r"^[a-z][a-z0-9+.-]*://", re2.IGNORECASE)
 
+#: How many containers deep a data object is scanned. Python's JSON parser
+#: accepts thousands of levels, more than a recursive walk has stack for, and
+#: no dataset is nested like that. serde's parsers stop at the same depth, so
+#: the Rust reader already treats anything deeper as unparseable.
+_MAX_DATA_DEPTH = 128
+#: How many edges YAML aliases may repeat in one data object. An honest file
+#: repeats a handful; `[*a, *a]` under `[*b, *b]` doubles them at every level.
+_MAX_ALIAS_EDGES = 100_000
+
+
+class _Unwalkable(Exception):
+    """A data object that parsed but is nested or aliased past those bounds."""
+
 
 def extract_data_links(text: str, path: str) -> list[RawEdge]:
     """Links inside data objects (§9.4).
@@ -620,12 +633,18 @@ def extract_data_links(text: str, path: str) -> list[RawEdge]:
     edge, and so is any string under a key named ``link``, ``links``, ``ref``,
     ``refs``, ``href`` or ``url``. Keys are never scanned, only values:
     scanning keys would turn a dataset's column names into edges.
+
+    An object that does not parse has no links, and neither does one the walk
+    cannot finish within its bounds: one malformed file must never cost a
+    vault its index (§5.2).
     """
     doc: Any = None
     if path.endswith(".json"):
         try:
             doc = json.loads(text)
-        except ValueError:
+        except Exception:
+            # ValueError for a syntax error or an integer too long to convert,
+            # RecursionError for 200,000 nested `[`: nothing to scan either way.
             return []
     else:
         sentinel: Any = object()
@@ -634,8 +653,19 @@ def extract_data_links(text: str, path: str) -> list[RawEdge]:
             return []
 
     out: list[RawEdge] = []
+    # A YAML alias makes the parsed object a graph: a container can be reached
+    # from many places, or from inside itself (`&a [*a]`). Each is walked once.
+    # `spans` holds where its edges sit in `out`, or None while it is still
+    # open, and a later visit repeats them from there, so a document indexes
+    # to what it always did without the walk doubling at every level. JSON
+    # has no aliases, and is spared the bookkeeping.
+    spans: dict[tuple[int, bool], tuple[int, int] | None] | None = (
+        None if path.endswith(".json") else {}
+    )
+    repeated = 0
 
-    def walk(value: Any, key_name: str | None) -> None:
+    def walk(value: Any, key_name: str | None, depth: int) -> None:
+        nonlocal repeated
         if isinstance(value, str):
             wiki = _DATA_WIKI_RE.match(value)
             if wiki:
@@ -660,15 +690,38 @@ def extract_data_links(text: str, path: str) -> list[RawEdge]:
                     )
                 )
             return
-        if isinstance(value, (list, tuple)):
-            for v in value:
-                walk(v, key_name)
+        if not isinstance(value, (list, tuple, dict)):
             return
+        if depth == _MAX_DATA_DEPTH:
+            raise _Unwalkable
+        # A sequence's strings are links or not by the key it sits under, so
+        # the same sequence under `ref` and under `note` is two walks.
+        mark = (id(value), key_name in _LINK_KEYS)
+        if spans is not None:
+            if mark in spans:
+                span = spans[mark]
+                if span is None:
+                    raise _Unwalkable  # it contains itself: no finite expansion
+                repeated += span[1] - span[0]
+                if repeated > _MAX_ALIAS_EDGES:
+                    raise _Unwalkable
+                out.extend([replace(e) for e in out[span[0] : span[1]]])
+                return
+            spans[mark] = None
+        start = len(out)
         if isinstance(value, dict):
             for k, v in value.items():
-                walk(v, str(k))
+                walk(v, str(k), depth + 1)
+        else:
+            for v in value:
+                walk(v, key_name, depth + 1)
+        if spans is not None:
+            spans[mark] = (start, len(out))
 
-    walk(doc, None)
+    try:
+        walk(doc, None, 0)
+    except _Unwalkable:
+        return []
     return out
 
 

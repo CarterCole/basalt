@@ -13,8 +13,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..keys import validate_key
-from . import UNSET, Listing, PreconditionFailed, Stat, Transport
+from ..keys import nfc, validate_key
+from . import UNSET, FolderAliased, Listing, PreconditionFailed, Stat, Transport
 
 #: Names skipped when listing: in-flight writes and editor/VCS droppings that
 #: are not part of the vault.
@@ -40,6 +40,37 @@ class LocalTransport(Transport):
         if p != self.root and self.root not in p.parents:
             raise ValueError(f"key escapes vault root: {key!r}")
         return p
+
+    def _check_folders(self, key: str) -> None:
+        """Refuse a key one of whose folders the filesystem spells another way.
+
+        A case-insensitive filesystem (APFS and NTFS by default) opens
+        ``Site/`` under more spellings than §2.2's NFC and lowercase fold
+        together: a long s (U+017F) for the ``S`` is one. So a name the
+        collision rule passed as new, and whose ACL was evaluated as a new
+        folder's, can still be an old folder on disk. That the path opens
+        says nothing, so each folder that exists is looked up in its parent's
+        listing, which gives names as they are stored. They are compared in
+        NFC: a key is NFC (§1.1) and some filesystems keep names decomposed.
+        """
+        here = self.root
+        seen: list[str] = []
+        for segment in key.split("/")[:-1]:
+            folder = here / segment
+            try:
+                folder.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                return  # not there yet: mkdir spells it as the key does
+            with os.scandir(here) as entries:
+                names = [entry.name for entry in entries]
+            if not any(nfc(name) == segment for name in names):
+                found = next((n for n in names if _same_file(folder, here / n)), None)
+                raise FolderAliased(
+                    "/".join([*seen, segment]),
+                    "/".join([*seen, nfc(found)]) if found is not None else None,
+                )
+            seen.append(segment)
+            here = folder
 
     # ------------------------------------------------------------- reads
 
@@ -119,6 +150,9 @@ class LocalTransport(Transport):
     ) -> Stat:
         validate_key(key)
         p = self._resolve(key)
+        # Before the precondition, which reads through the same alias, and
+        # before mkdir, which would add folders inside the one aliased.
+        self._check_folders(key)
         if if_match is not UNSET:
             current = self.stat(key)
             if if_match != (current.etag if current else None):
@@ -148,6 +182,13 @@ class LocalTransport(Transport):
             # Both mean there is no object at this key, which is a successful
             # delete under §1.2's idempotence.
             return
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:  # gone since it was listed
+        return False
 
 
 __all__ = ["LocalTransport"]

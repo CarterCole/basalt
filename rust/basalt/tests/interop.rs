@@ -1047,6 +1047,263 @@ fn serves_both_surfaces_over_tcp() {
     assert!(!head.contains("\"basalt\""), "{head}");
 }
 
+/// The tool-error payload of a `tools/call` answer, as `(error, status)`.
+fn tool_fault(answer: &Json) -> Option<(String, i64)> {
+    let result = answer.get("result")?;
+    if result.get("isError") != Some(&Json::Bool(true)) {
+        return None;
+    }
+    let text = result
+        .get("content")?
+        .as_array()?
+        .first()?
+        .get("text")?
+        .as_str()?;
+    let payload = parse_json(text).ok()?;
+    let status = match payload.get("status") {
+        Some(Json::Int(i)) => *i,
+        _ => return None,
+    };
+    Some((payload.get("error")?.as_str()?.to_string(), status))
+}
+
+fn rpc_error_code(answer: &Json) -> Option<i64> {
+    match answer.get("error")?.get("code")? {
+        Json::Int(i) => Some(*i),
+        _ => None,
+    }
+}
+
+/// INTEROP §1.5: `Content-Length` is the client's number, and the listener
+/// must not size anything by it. A declared 2^63-1 bytes used to be allocated
+/// as one drain buffer, which aborts the process — every connection with it.
+/// An over-limit body is refused with the same fault whatever it declares,
+/// and the server goes on serving.
+#[test]
+fn an_oversized_content_length_is_refused_not_allocated() {
+    use std::io::{Read, Write};
+    use std::net::Shutdown;
+    use std::sync::Arc;
+
+    let gk = Arc::new(gatekeeper_for("u:reader"));
+    let listener = Gatekeeper::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || gk.serve(listener));
+
+    let post = |declared: String, sent: usize, hang_up: bool| -> String {
+        let mut sock = std::net::TcpStream::connect(addr).unwrap();
+        // A server that stops answering fails the test instead of hanging it.
+        sock.set_read_timeout(Some(std::time::Duration::from_secs(30)))
+            .unwrap();
+        sock.write_all(
+            format!(
+                "POST /mcp HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\ncontent-length: {declared}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        sock.write_all(&vec![b' '; sent]).unwrap();
+        if hang_up {
+            sock.shutdown(Shutdown::Write).unwrap();
+        }
+        let mut buf = String::new();
+        sock.read_to_string(&mut buf).unwrap();
+        buf
+    };
+    let refused = |answer: &str| {
+        assert!(answer.starts_with("HTTP/1.1 400 Bad Request"), "{answer}");
+        assert!(answer.contains("request body too large"), "{answer}");
+    };
+
+    // The request that aborted the server: 2^63-1 declared, one mebibyte
+    // sent, and the client left waiting for an answer with the socket open.
+    refused(&post(i64::MAX.to_string(), 1 << 20, false));
+    // The largest length there is, and nothing behind it.
+    refused(&post(u64::MAX.to_string(), 0, true));
+    // One byte over the limit, all of it sent.
+    let over = basalt::serve::router::MAX_BODY + 1;
+    refused(&post(over.to_string(), over, false));
+
+    // And the server is still there.
+    let message = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let mut sock = std::net::TcpStream::connect(addr).unwrap();
+    sock.write_all(
+        format!(
+            "POST /mcp HTTP/1.1\r\nhost: localhost\r\ncontent-length: {}\r\n\r\n{message}",
+            message.len()
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut pong = String::new();
+    sock.read_to_string(&mut pong).unwrap();
+    assert!(pong.starts_with("HTTP/1.1 200 OK"), "{pong}");
+    assert!(pong.contains(r#""result":{}"#), "{pong}");
+}
+
+/// INTEROP §4.1: a message this server cannot parse is a JSON-RPC parse
+/// error. That has to hold for one nested without end, too: the parser
+/// recursed once per level, and 20,000 `[` posted to `/mcp` overflowed the
+/// stack and ended the process.
+#[test]
+fn deeply_nested_json_is_a_parse_error_not_a_crash() {
+    let gk = gatekeeper_for("u:reader");
+    let deep_params = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{}{}}}"#,
+        "[".repeat(20_000),
+        "]".repeat(20_000)
+    );
+    for body in ["[".repeat(20_000), "{\"a\":".repeat(20_000), deep_params] {
+        let r = gk.handle_with_body(&request("POST", "/mcp"), body.as_bytes());
+        assert_eq!(
+            r.status, 200,
+            "/mcp answers 200 and carries the error inside"
+        );
+        assert_eq!(rpc_error_code(&body_of(&r)), Some(-32700));
+    }
+    let pong = rpc(&gk, "ping", Json::obj().build());
+    assert!(
+        pong.get("result").is_some(),
+        "and it still answers: {pong:?}"
+    );
+}
+
+/// A path arrives percent-encoded on REST and in an MCP resource URI, and an
+/// escape can be cut short by anything — `%a€` puts a three-byte character
+/// where the second hex digit belongs. Decoding by slicing the string there
+/// panicked the connection's thread. A broken escape is kept as written, so
+/// the path names nothing and the answer is the ordinary not-found.
+#[test]
+fn a_broken_percent_escape_names_nothing_on_any_surface() {
+    use basalt::serve::rest::percent_decode;
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    assert_eq!(percent_decode("%a€"), "%a€");
+    assert_eq!(percent_decode("%€"), "%€");
+    assert_eq!(percent_decode("%"), "%");
+    assert_eq!(percent_decode("%+f"), "%+f", "a sign is not a hex digit");
+    assert_eq!(
+        percent_decode("%zz%41"),
+        "%zzA",
+        "the escapes that work still decode"
+    );
+    assert_eq!(percent_decode("%ff"), "%ff", "decodes, but not to UTF-8");
+    assert_eq!(
+        percent_decode("Notes/Start%20Here.md"),
+        "Notes/Start Here.md"
+    );
+    assert_eq!(percent_decode("caf%C3%A9%2fx"), "café/x");
+
+    let gk = gatekeeper_for("u:carter");
+    for route in ["node", "raw", "links"] {
+        let r = get(&gk, &format!("/api/v1/{route}/Notes/%a€"));
+        assert_eq!(r.status, 404, "{route}");
+    }
+    let read = rpc(
+        &gk,
+        "resources/read",
+        Json::obj()
+            .set("uri", Json::str(format!("basalt://{VAULT_ID}/Notes/%a€")))
+            .build(),
+    );
+    assert_eq!(
+        read.get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str()),
+        Some("not_found")
+    );
+    // The same reading of a path that is there.
+    let found = rpc(
+        &gk,
+        "resources/read",
+        Json::obj()
+            .set(
+                "uri",
+                Json::str(format!("basalt://{VAULT_ID}/Notes/Start%20Here.md")),
+            )
+            .build(),
+    );
+    assert!(found.get("result").is_some(), "{found:?}");
+    assert_eq!(get(&gk, "/api/v1/node/Notes/Start%20Here.md").status, 200);
+
+    // Over TCP, where the query string is decoded too: the connection gets
+    // an answer instead of being dropped by a thread that panicked.
+    let gk = Arc::new(gk);
+    let listener = Gatekeeper::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || gk.serve(listener));
+    for target in [
+        "/api/v1/node/Notes/%a€",
+        "/api/v1/list/%a€",
+        "/api/v1/effective?path=%a€",
+        "/api/v1/search?q=%a€&limit=%€",
+    ] {
+        let mut sock = std::net::TcpStream::connect(addr).unwrap();
+        sock.write_all(format!("GET {target} HTTP/1.1\r\nhost: localhost\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut answer = String::new();
+        sock.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 "), "{target}: {answer:?}");
+        assert!(!answer.starts_with("HTTP/1.1 5"), "{target}: {answer}");
+    }
+}
+
+/// §1.1 bounds a key at 1024 bytes, so a longer path names nothing, and every
+/// operation that takes a path says so before it evaluates an ACL. Evaluating
+/// first cost the cube of the path's depth with the vault lock held: one
+/// 16 KB request for `list/b/b/b/…` stalled every other request for 24
+/// seconds.
+#[test]
+fn a_path_too_long_to_be_a_key_is_not_found_on_every_surface() {
+    let gk = gatekeeper_for("u:carter");
+    let deep = "b/".repeat(8_000);
+    let started = std::time::Instant::now();
+
+    for target in [deep.clone(), format!("{deep}x.md"), "x".repeat(1_017)] {
+        for route in ["node", "raw", "links", "list"] {
+            let r = get(&gk, &format!("/api/v1/{route}/{target}"));
+            assert_eq!(r.status, 404, "{route} of {} bytes", target.len());
+        }
+        let r = get(&gk, &format!("/api/v1/effective?path={target}"));
+        assert_eq!(r.status, 404, "effective of {} bytes", target.len());
+
+        for (tool, arg) in [
+            ("basalt_node", "path"),
+            ("basalt_links", "path"),
+            ("basalt_list", "folder"),
+            ("basalt_effective", "path"),
+        ] {
+            let answer = tool_call(&gk, tool, Json::obj().set(arg, Json::str(&target)).build());
+            assert_eq!(
+                tool_fault(&answer),
+                Some(("not_found".to_string(), 404)),
+                "{tool} of {} bytes",
+                target.len()
+            );
+        }
+        let read = rpc(
+            &gk,
+            "resources/read",
+            Json::obj()
+                .set("uri", Json::str(format!("basalt://{VAULT_ID}/{target}")))
+                .build(),
+        );
+        assert_eq!(
+            read.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str()),
+            Some("not_found")
+        );
+    }
+    // Unfixed, the first of these alone ran for minutes.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
 /// E8: the shape invariants, read out of the corpus.
 ///
 /// Each of these was a disagreement found by running this implementation and

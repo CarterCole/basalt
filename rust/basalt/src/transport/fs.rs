@@ -6,6 +6,7 @@
 
 use super::{Capability, ListOpts, Listing, PutMeta, Result, Stat, Transport, TransportError};
 use crate::keys::validate_key;
+use crate::order::nfc;
 use md5::{Digest as _, Md5};
 use std::collections::BTreeSet;
 use std::fs;
@@ -55,6 +56,82 @@ impl FsTransport {
         }
         Ok(self.root.join(candidate))
     }
+
+    /// Refuse a key the filesystem would file under a folder spelled another
+    /// way.
+    ///
+    /// §2.2 folds names with NFC and lowercase, and a case-insensitive
+    /// filesystem folds further: APFS and NTFS both take `ſite` (U+017F) for
+    /// `Site`. Such a key passes every check above the transport as a folder
+    /// nobody has made yet — the ACL included, which is evaluated for a
+    /// folder that does not exist — and `create_dir_all` then lands the bytes
+    /// in the existing, differently protected one. So every ancestor already
+    /// on disk has to be there under exactly this name, and only its parent's
+    /// listing can say so: opening it by name is the lookup that folds. Names
+    /// are compared in NFC, because keys are NFC (§1.1) and some filesystems
+    /// hand names back decomposed.
+    fn check_folder_spelling(&self, key: &str) -> Result<()> {
+        let segments: Vec<&str> = key.split('/').collect();
+        let mut dir = self.root.clone();
+        let mut walked = String::new();
+        // The last segment is the object; the create-only check covers it.
+        for seg in &segments[..segments.len() - 1] {
+            let path = dir.join(seg);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {}
+                // Nothing answers to that name under any spelling, so nothing
+                // lies beneath it either, and the rest is made as spelled.
+                Err(e) if is_absent(&e) => return Ok(()),
+                Err(e) => return Err(e.into()),
+            }
+            let mut listed = false;
+            for entry in fs::read_dir(&dir)? {
+                if nfc(&entry?.file_name().to_string_lossy()) == *seg {
+                    listed = true;
+                    break;
+                }
+            }
+            if !listed {
+                let asked = format!("{walked}{seg}/");
+                return Err(match listed_name(&dir, &path) {
+                    Some(name) => TransportError::FolderAlias {
+                        asked,
+                        existing: format!("{walked}{name}/"),
+                    },
+                    // It answered a moment ago and no entry is it now: the
+                    // folder changed underneath the check. Refuse, not guess.
+                    None => TransportError::Backend(format!(
+                        "{asked} exists under another spelling on this filesystem"
+                    )),
+                });
+            }
+            walked.push_str(seg);
+            walked.push('/');
+            dir = path;
+        }
+        Ok(())
+    }
+}
+
+/// The name `dir` lists for `path`, which exists but not under the name it
+/// was asked for by: the entry that is the same file.
+#[cfg(unix)]
+fn listed_name(dir: &Path, path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let want = fs::symlink_metadata(path).ok()?;
+    fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+        let have = entry.metadata().ok()?;
+        (have.dev() == want.dev() && have.ino() == want.ino())
+            .then(|| entry.file_name().to_string_lossy().into_owned())
+    })
+}
+
+/// Without an inode to compare, the canonical path: it carries each name as
+/// the filesystem stores it.
+#[cfg(not(unix))]
+fn listed_name(_dir: &Path, path: &Path) -> Option<String> {
+    let real = fs::canonicalize(path).ok()?;
+    Some(real.file_name()?.to_string_lossy().into_owned())
 }
 
 fn mtime_of(meta: &fs::Metadata) -> Option<String> {
@@ -130,6 +207,7 @@ impl Transport for FsTransport {
     fn put(&self, key: &str, bytes: &[u8], meta: &PutMeta) -> Result<Stat> {
         validate_key(key)?;
         let path = self.resolve(key)?;
+        self.check_folder_spelling(key)?;
         if let Some(want) = &meta.if_match {
             let have = self.stat(key)?.and_then(|s| s.etag);
             if &have != want {

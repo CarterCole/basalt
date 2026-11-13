@@ -245,24 +245,7 @@ fn parse_wiki_body(body: &str) -> WikiBody {
 
 /// Percent-decode, falling back to the raw string when the escapes are broken.
 fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(v) => {
-                    out.push(v);
-                    i += 3;
-                    continue;
-                }
-                Err(_) => return s.to_string(),
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+    crate::keys::percent_decode(s, false).unwrap_or_else(|| s.to_string())
 }
 
 /// Extract every edge and tag from note text, edges in document order — which

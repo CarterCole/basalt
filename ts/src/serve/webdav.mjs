@@ -9,7 +9,7 @@
 // Read-only, DAV class 1: there is no write path in §12, and a class-2 server
 // would have to implement LOCK for writes it cannot perform.
 
-import { Fault, mediaFor } from './core.mjs';
+import { Fault, mediaFor, authorBytesHeaders } from './core.mjs';
 import { basename } from '../keys.mjs';
 
 const MOUNT = '/dav';
@@ -182,6 +182,7 @@ export async function handleWebdav(surface, principal, req, res, { body, send, b
       }
       send(res, 200, r.bytes, {
         'content-type': r.media_type,
+        ...authorBytesHeaders(r.media_type),
         etag: r.etag ?? undefined,
         'accept-ranges': 'none',
         dav: '1, 3',

@@ -13,15 +13,19 @@ import { buildResolver } from '../links.mjs';
 import { pathToKey, parentFolder, basename, extname } from '../keys.mjs';
 import { createRenderer, hrefFor, pathCandidates, escapeHtml } from './markdown.mjs';
 import { vendorFile } from './vendor.mjs';
+import { authorBytesHeaders } from '../serve/core.mjs';
 import {
   shell, navTree, notePage, homePage, searchPage, errorPage, localGraph, ICON_SVG,
 } from './pages.mjs';
 
 const PUBLIC = fileURLToPath(new URL('./public/', import.meta.url));
 
-const MEDIA = {
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
+// Types for the vault's content, which an author supplied. No script and no
+// stylesheet type is in this table on purpose: the page's policy trusts
+// script-src 'self', and /_raw/ is on this origin, so a stored .js served as
+// JavaScript would be script any note could try to load. Anything not listed
+// is a download.
+const RAW_MEDIA = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif',
@@ -30,7 +34,24 @@ const MEDIA = {
   '.json': 'application/json', '.yaml': 'text/yaml', '.yml': 'text/yaml',
   '.txt': 'text/plain; charset=utf-8',
 };
-const mediaFor = (p) => MEDIA[extname(p)] ?? 'application/octet-stream';
+// Types for the site's own files under /_assets/, which ship with basalt.
+const ASSET_MEDIA = {
+  ...RAW_MEDIA,
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+};
+const mediaFor = (p) => RAW_MEDIA[extname(p)] ?? 'application/octet-stream';
+const assetMediaFor = (p) => ASSET_MEDIA[extname(p)] ?? 'application/octet-stream';
+
+/** Headers for a node's own bytes; see authorBytesHeaders. */
+const rawHeaders = (p) => {
+  const type = mediaFor(p);
+  return {
+    'content-type': type,
+    'cache-control': 'private, no-store',
+    ...authorBytesHeaders(type),
+  };
+};
 
 export class Site {
   constructor(vault) {
@@ -100,7 +121,7 @@ export class Site {
         this.assets.set(name, await readFile(vendored ?? path.join(PUBLIC, name)));
       } catch { return null; }
     }
-    return { body: this.assets.get(name), type: mediaFor(name) };
+    return { body: this.assets.get(name), type: assetMediaFor(name) };
   }
 
   /** Build the nav tree for this principal. */
@@ -158,17 +179,9 @@ export class Site {
       if (target === null) return fail(404, principal, null);
       const r = await this.vault.readNode(principal, target);
       if (r.status !== 200) return fail(r.status, principal, null);
-      return {
-        status: 200,
-        headers: {
-          'content-type': mediaFor(target),
-          'cache-control': 'private, no-store',
-          // Content is author-supplied; never let a browser sniff it into
-          // something executable.
-          'x-content-type-options': 'nosniff',
-        },
-        body: r.bytes,
-      };
+      // Content is author-supplied: never sniffed, never a document in this
+      // origin (rawHeaders).
+      return { status: 200, headers: rawHeaders(target), body: r.bytes };
     }
 
     // ---- search
@@ -216,15 +229,7 @@ export class Site {
     if (entry.kind === 'asset' || entry.kind === 'opaque') {
       const r = await this.vault.readNode(principal, vaultPath);
       if (r.status !== 200) return fail(r.status, principal, null);
-      return {
-        status: 200,
-        headers: {
-          'content-type': mediaFor(vaultPath),
-          'cache-control': 'private, no-store',
-          'x-content-type-options': 'nosniff',
-        },
-        body: r.bytes,
-      };
+      return { status: 200, headers: rawHeaders(vaultPath), body: r.bytes };
     }
 
     return this.#notePage(vaultPath, principal, ctx);

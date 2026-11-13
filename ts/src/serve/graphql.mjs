@@ -673,9 +673,35 @@ function printValue(v) {
   return '{' + Object.entries(v).map(([k, x]) => `${k}: ${printValue(x)}`).join(', ') + '}';
 }
 
+// ------------------------------------------------------------------- limits
+//
+// This surface answers anyone, and a query is a program: a kilobyte of nested
+// fragments (`F0 { ...F1 ...F1 }`, `F1 { ...F2 ...F2 }`, …) doubles the work
+// with every level, and an aliased field repeats a whole listing. One request
+// gets a fixed amount of work and a fixed depth, and is refused past either.
+
+/** Selections visited plus values resolved, per request. A 1,000-entry
+ *  listing with a dozen fields per entry fits several times over. */
+const MAX_WORK = 100_000;
+/** Nesting of fields, fragments inlined. The schema's longest useful walk
+ *  (node → links → target → node …) is a handful. */
+const MAX_DEPTH = 16;
+
+/** Ends the whole request; never recorded as one field's error. */
+class LimitExceeded extends GraphQLError {}
+
+function spend(ctx) {
+  if (++ctx.work > MAX_WORK) {
+    throw new LimitExceeded('this query asks for too much at once; split it into smaller queries');
+  }
+}
+
 // --------------------------------------------------------------- validation
 
-const fieldOf = (type, name) => type.kind === 'OBJECT' ? type.fields?.[name] : undefined;
+// hasOwn: a field called `constructor` is not a field of any type.
+const fieldOf = (type, name) => type.kind === 'OBJECT' && type.fields && Object.hasOwn(type.fields, name)
+  ? type.fields[name] : undefined;
+const fragmentOf = (fragments, name) => Object.hasOwn(fragments, name) ? fragments[name] : undefined;
 
 /**
  * Validate before executing, so a malformed query fails as one error list
@@ -687,7 +713,8 @@ const fieldOf = (type, name) => type.kind === 'OBJECT' ? type.fields?.[name] : u
 function validate(sch, doc, op) {
   const errors = [];
   const declared = new Set(op.vars.map((v) => v.name));
-  const seen = new Set();
+  const seen = new Set();   // fragments on the path being walked
+  const done = new Set();   // fragments already walked: once is enough
 
   const checkArgs = (def, sel, where) => {
     const defs = def.args ?? {};
@@ -708,14 +735,22 @@ function validate(sch, doc, op) {
   const walk = (type, selections, where) => {
     for (const sel of selections) {
       if (sel.kind === 'spread') {
-        const frag = doc.fragments[sel.name];
+        const frag = fragmentOf(doc.fragments, sel.name);
         if (!frag) { errors.push(`unknown fragment "${sel.name}"`); continue; }
-        if (seen.has(sel.name)) continue;  // cycles are not executed
+        if (seen.has(sel.name)) {
+          errors.push(`fragment "${sel.name}" spreads itself`);
+          continue;
+        }
+        // A fragment is checked against its own type condition, so the
+        // result is the same wherever it is spread. Walking it at every
+        // spread is what made validation itself exponential.
+        if (done.has(sel.name)) continue;
         seen.add(sel.name);
         const target = sch.types[frag.typeCondition];
         if (!target) errors.push(`fragment "${sel.name}" is on unknown type "${frag.typeCondition}"`);
         else walk(target, frag.selections, `fragment ${sel.name}`);
         seen.delete(sel.name);
+        done.add(sel.name);
         continue;
       }
       if (sel.kind === 'inline') {
@@ -819,9 +854,10 @@ const literalOf = (node) => node.kind === 'list' ? node.value.map(literalOf)
 /** Flatten fragments and apply @skip/@include. */
 function collectFields(sch, type, selections, ctx, into = new Map()) {
   for (const sel of selections) {
+    spend(ctx);
     if (!directiveAllows(sel, ctx)) continue;
     if (sel.kind === 'spread') {
-      const frag = ctx.fragments[sel.name];
+      const frag = fragmentOf(ctx.fragments, sel.name);
       if (!frag) continue;
       // No interfaces or unions in this schema, so a condition either names
       // this type or does not apply.
@@ -858,8 +894,13 @@ function directiveAllows(sel, ctx) {
 }
 
 async function executeSelections(sch, type, selections, source, ctx, path) {
+  // List indexes are in the path too; only the field names are depth.
+  if (path.reduce((n, p) => n + (typeof p === 'string' ? 1 : 0), 0) >= MAX_DEPTH) {
+    throw new LimitExceeded(`this query is nested more than ${MAX_DEPTH} fields deep`);
+  }
   const out = {};
   for (const sel of collectFields(sch, type, selections, ctx).values()) {
+    spend(ctx);
     const key = sel.responseKey;
     const here = [...path, key];
 
@@ -892,6 +933,7 @@ async function executeSelections(sch, type, selections, source, ctx, path) {
         : source?.[sel.name];
       out[key] = await completeValue(sch, ref, raw, sel.selections, ctx, here);
     } catch (err) {
+      if (err instanceof LimitExceeded) throw err;
       if (err instanceof NullBubble) {
         if (ref.kind === 'NON_NULL') throw err;
         out[key] = null;
@@ -916,9 +958,11 @@ async function completeValue(sch, ref, value, selections, ctx, path) {
     const out = [];
     let i = 0;
     for (const item of value) {
+      spend(ctx);
       try {
         out.push(await completeValue(sch, ref.ofType, item, selections, ctx, [...path, i]));
       } catch (err) {
+        if (err instanceof LimitExceeded) throw err;
         if (err instanceof NullBubble) {
           if (ref.ofType.kind === 'NON_NULL') throw err;
           out.push(null);
@@ -1002,7 +1046,7 @@ export async function graphql({ source, variables, operationName, surface, princ
   }
 
   const ctx = {
-    surface, principal, schema, fragments: doc.fragments, vars, errors: [],
+    surface, principal, schema, fragments: doc.fragments, vars, errors: [], work: 0,
   };
   let data = null;
   try {

@@ -370,7 +370,22 @@ export function storeObject(vault, {
 
     // --- identity (§4.3) ----------------------------------------------------
     const id = ulid();
-    if (kind === 'note') content = Buffer.from(withId(text, id, { title, createdBy }), 'utf8');
+    if (kind === 'note') {
+      const stamped = withId(text, id, { title, createdBy });
+      // Checked again on the bytes that will be written, which are what every
+      // reader indexes. The checks above saw the note as it was supplied; if
+      // stamping ever changes what the frontmatter says, that must be a
+      // refusal here and not an ACL or an id nobody authorized (§12.7).
+      const written = parseNote(stamped, path);
+      if (written.id !== id) {
+        throw bad('the frontmatter could not be stamped with the new id; check that it is valid YAML');
+      }
+      if (principal !== null && written.acl !== null) {
+        authorize(vault, principal, folder, ['write_acl'],
+          'frontmatter sets basalt.acl, which needs write_acl');
+      }
+      content = Buffer.from(stamped, 'utf8');
+    }
 
     // --- write --------------------------------------------------------------
     // Content first. A sidecar written first and then orphaned by a failed
@@ -381,6 +396,12 @@ export function storeObject(vault, {
       .catch((err) => {
         if (err?.code === 'PRECONDITION_FAILED') {
           throw conflict(`${path} was created by someone else just now`);
+        }
+        // The store itself folds names further than §2.2 does, so this path
+        // is an existing folder under another spelling. The ACL was evaluated
+        // for the spelling given, which is not where the bytes would land.
+        if (err?.code === 'KEY_ALIASED') {
+          throw conflict(`${path} collides with an existing folder: ${err.message}`);
         }
         throw err;
       });

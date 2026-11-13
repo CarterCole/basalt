@@ -7,13 +7,14 @@ any substrate that provides it.
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from basalt.keys import BasaltKeyError
-from basalt.transport import PreconditionFailed, Transport
+from basalt.transport import FolderAliased, PreconditionFailed, Transport
 from basalt.transport.local import LocalTransport
 from basalt.transport.memory import MemoryTransport
 from basalt.transport.s3 import PRESETS, S3Transport
@@ -178,6 +179,67 @@ def test_local_never_writes_directory_markers(tmp_path: Path) -> None:
     transport.put("content/Notes/a.md", b"x")
     transport.delete("content/Notes/a.md")
     assert transport.list("content/").keys == []
+
+
+def folds_case(directory: Path) -> bool:
+    """Whether the filesystem under ``directory`` opens a name in another case."""
+    probe = directory / "CaseProbe"
+    probe.mkdir()
+    try:
+        return (directory / "caseprobe").exists()
+    finally:
+        probe.rmdir()
+
+
+def test_local_refuses_a_folder_the_filesystem_spells_another_way(tmp_path: Path) -> None:
+    """A key under ``site/`` must not land in the ``Site/`` that is on disk.
+
+    §2.2 folds names with NFC and lowercase; APFS and NTFS fold further (a
+    long s, U+017F, opens ``S``), so a name the collision rule passes as a
+    new folder can be an old one, with an ACL nobody evaluated. The transport
+    is the last line of defense: it goes by the parent's listing, never by
+    whether the path opens.
+    """
+    if not folds_case(tmp_path):
+        pytest.skip("needs a case-insensitive filesystem (the macOS and Windows default)")
+    transport = LocalTransport(tmp_path)
+    transport.put("content/Site/Home.md", b"# Home\n")
+
+    def on_disk() -> list[str]:
+        return sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+
+    before = on_disk()
+    # The folder a key names, then the first of its folders that is an alias
+    # and the spelling the filesystem has for it.
+    aliases = [
+        ("content/site", "content/site", "content/Site"),
+        ("content/SITE", "content/SITE", "content/Site"),
+        ("Content/Site", "Content", "content"),
+    ]
+    long_s = "content/\u017fite"
+    if (tmp_path / long_s).exists():  # APFS; not every case-insensitive filesystem
+        aliases.append((long_s, long_s, "content/Site"))
+    for folder, asked, found in aliases:
+        for key in (f"{folder}/Planted.md", f"{folder}/New/Deep/Planted.md", f"{folder}/Home.md"):
+            for condition in ({}, {"if_match": None}):
+                with pytest.raises(FolderAliased) as excinfo:
+                    transport.put(key, b"planted", **condition)
+                assert (excinfo.value.asked, excinfo.value.found) == (asked, found), key
+    assert on_disk() == before, "nothing was written, and no folder made inside Site/"
+    assert transport.get("content/Site/Home.md") == b"# Home\n"
+
+    # The folder's own spelling still works, at any depth.
+    transport.put("content/Site/Deep/Other.md", b"x", if_match=None)
+    assert transport.get("content/Site/Deep/Other.md") == b"x"
+
+
+def test_local_accepts_a_folder_the_filesystem_stores_decomposed(tmp_path: Path) -> None:
+    """Keys are NFC (§1.1); HFS+ stores names decomposed and APFS keeps what it
+    was given. The same name in another normalization is not another folder."""
+    (tmp_path / "content" / unicodedata.normalize("NFD", "Caf\u00e9")).mkdir(parents=True)
+    transport = LocalTransport(tmp_path)
+    transport.put("content/Caf\u00e9/a.md", b"x", if_match=None)
+    assert transport.get("content/Caf\u00e9/a.md") == b"x"
 
 
 # ------------------------------------------------------------------- S3 only

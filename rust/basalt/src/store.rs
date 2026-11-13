@@ -94,7 +94,20 @@ impl From<VaultError> for StoreError {
 
 impl From<TransportError> for StoreError {
     fn from(e: TransportError) -> Self {
-        Self::internal(e.to_string())
+        match e {
+            // A collision the §2.2 check could not see, because the filesystem
+            // folds names further than §2.2 does. It is the same refusal, said
+            // in vault paths like the others.
+            TransportError::FolderAlias { asked, existing } => {
+                let path = |k: &str| k.strip_prefix(CONTENT).unwrap_or(k).to_string();
+                Self::conflict(format!(
+                    "{} is the same folder as {} on this filesystem",
+                    path(&asked),
+                    path(&existing)
+                ))
+            }
+            e => Self::internal(e.to_string()),
+        }
     }
 }
 

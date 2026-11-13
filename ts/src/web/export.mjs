@@ -44,6 +44,102 @@ export function applyBase(html, base) {
   );
 }
 
+// File types a browser opens as a document, running any script inside, when
+// a static host serves them by their extension. A gatekeeper answers for these
+// with headers that make them inert (serve/core.mjs authorBytesHeaders); a
+// static host sends no such headers, so the export leaves them out.
+const DOCUMENT_EXT = new Set([
+  '.html', '.htm', '.xhtml', '.xht', '.shtml', '.mht', '.mhtml',
+  '.xml', '.xsl', '.xslt', '.svgz',
+]);
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_ELEMENTS = new Set([
+  'svg', 'g', 'defs', 'symbol', 'use', 'switch', 'title', 'desc', 'style',
+  'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+  'text', 'tspan', 'textpath', 'image',
+  'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask', 'pattern', 'marker',
+  'filter', 'feblend', 'fecolormatrix', 'fecomponenttransfer', 'fecomposite',
+  'feconvolvematrix', 'fediffuselighting', 'fedisplacementmap', 'fedistantlight',
+  'fedropshadow', 'feflood', 'fefunca', 'fefuncb', 'fefuncg', 'fefuncr',
+  'fegaussianblur', 'femerge', 'femergenode', 'femorphology', 'feoffset',
+  'fepointlight', 'fespecularlighting', 'fespotlight', 'fetile', 'feturbulence',
+]);
+
+function decodeXmlText(s) {
+  return s.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi, (m, e) => {
+    const k = e.toLowerCase();
+    if (k[0] === '#') {
+      const cp = k[1] === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    }
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[k];
+  });
+}
+
+/**
+ * True when an SVG is only a drawing: nothing in it can run script, load
+ * another document or link anywhere, even opened on its own.
+ *
+ * This is an allowlist, and it refuses whatever it does not recognise rather
+ * than trying to name what is dangerous: plain SVG elements only, no element
+ * from another namespace (which is how XHTML's <script> gets into an SVG), no
+ * event attribute, no `href` that leaves the file, no DTD (entities can carry
+ * markup), no processing instruction, no CDATA. Drawings saved by an editor
+ * with its own metadata elements fail it; re-save those as plain SVG.
+ */
+export function isInertSvg(bytes) {
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return false;
+  }
+  text = text.replace(/^\uFEFF/, '').replace(/^\s*<\?xml\s[^?]*\?>/, '');
+  if (/<!DOCTYPE|<!ENTITY|<!\[CDATA\[|<\?/i.test(text)) return false;
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  let ok = true;
+  let sawRoot = false;
+  const rest = text.replace(
+    /<(\/?)([^\s<>\/"'=]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/g,
+    (_, closing, name, attrs) => {
+      const el = name.toLowerCase();
+      if (!/^[a-z][a-z0-9]*$/.test(el) || !SVG_ELEMENTS.has(el)) ok = false;
+      if (!sawRoot) { sawRoot = true; if (el !== 'svg' || closing) ok = false; }
+      if (closing) { if (attrs.trim()) ok = false; return ''; }
+      const leftover = attrs.replace(
+        /\s+([^\s=<>"'\/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
+        (__, rawName, dq, sq) => {
+          const attr = rawName.toLowerCase();
+          const local = attr.slice(attr.lastIndexOf(':') + 1);
+          const value = decodeXmlText(dq ?? sq ?? '').trim();
+          if (!attr.includes(':') && attr.startsWith('on')) ok = false;
+          if (attr === 'xmlns' && value !== SVG_NS) ok = false;
+          if (local === 'href' && !value.startsWith('#')
+              && !(el === 'image' && /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+\/=\s]*$/i.test(value))) {
+            ok = false;
+          }
+          return '';
+        });
+      if (leftover.replace(/\/$/, '').trim()) ok = false;
+      return '';
+    });
+  return ok && sawRoot && !rest.includes('<') && !rest.includes('>');
+}
+
+/**
+ * Why a published non-note cannot go on a static host as a file, or null.
+ */
+export function unsafeOnStaticHost(vaultPath, bytes) {
+  const ext = (vaultPath.match(/\.[^./]+$/) ?? [''])[0].toLowerCase();
+  if (DOCUMENT_EXT.has(ext)) return 'a browser would open it as a page and run its script';
+  if (ext === '.svg' && !isInertSvg(bytes)) {
+    return 'this SVG holds more than a drawing (script, links, foreign markup, or an '
+      + "editor's own metadata)";
+  }
+  return null;
+}
+
 /** Where a vault path lands in the output tree. */
 function outputPathFor(vaultPath, kind) {
   if (kind === 'note') {
@@ -103,6 +199,16 @@ export async function exportSite({ vault, out, base = '', withVault = false, cle
   let diagrams = false;
   const note = (html) => { diagrams ||= hasDiagrams(html); };
   for (const entry of published) {
+    // Read once, as the anonymous reader: these are the bytes that would be
+    // published, and a file a browser would run is not published as a file.
+    const raw = await vault.readNode(ANON, entry.path);
+    if (entry.kind !== 'note' && raw.status === 200) {
+      const why = unsafeOnStaticHost(entry.path, raw.bytes);
+      if (why) {
+        log(`  not exported: ${entry.path} (${why})`, 'warn');
+        continue;
+      }
+    }
     const res = await site.handle({
       urlPath: '/' + entry.path.replace(/\.(md|markdown)$/i, ''),
       query: new URLSearchParams(),
@@ -119,7 +225,6 @@ export async function exportSite({ vault, out, base = '', withVault = false, cle
     await write(outputPathFor(entry.path, entry.kind), body);
 
     // Raw bytes, which the HTML references for images and "View source".
-    const raw = await vault.readNode(ANON, entry.path);
     if (raw.status === 200) await write(path.join('_raw', entry.path), raw.bytes);
     pages++;
   }

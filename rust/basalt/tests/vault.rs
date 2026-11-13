@@ -223,6 +223,32 @@ fn canonical_round_trips() {
     );
 }
 
+/// The parser recurses once per level of nesting, and what it reads is
+/// whatever a client posts to `/mcp`. With no bound, 20,000 `[` overflowed the
+/// stack and took the process with it; past the limit a document is now an
+/// ordinary parse error.
+#[test]
+fn canonical_refuses_deep_nesting_on_read() {
+    use basalt::canonical::MAX_DEPTH;
+    let nested = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+    assert!(
+        parse_json(&nested(MAX_DEPTH)).is_ok(),
+        "the limit itself parses"
+    );
+    let err = parse_json(&nested(MAX_DEPTH + 1)).unwrap_err();
+    assert!(err.contains("nested deeper"), "{err}");
+
+    // The shapes that aborted: never closed, and objects as well as arrays.
+    assert!(parse_json(&"[".repeat(20_000)).is_err());
+    assert!(parse_json(&"{\"a\":".repeat(20_000)).is_err());
+    let mixed = "[{\"a\":".repeat(MAX_DEPTH);
+    assert!(parse_json(&mixed).unwrap_err().contains("nested deeper"));
+
+    // Depth is nesting, not size: siblings do not add up.
+    let wide = format!("[{}]", vec!["[[1]]"; 10_000].join(","));
+    assert!(parse_json(&wide).is_ok());
+}
+
 // ------------------------------------------------------------- §1.1 keys
 
 #[test]
@@ -657,6 +683,109 @@ fn data_object_links() {
     );
 }
 
+/// §9.4 reads data objects for links, and a data object is whatever a writer
+/// stored. One nested too deep to parse is a data object with no links: not a
+/// failed index pass, and not a stack overflow that ends the process.
+#[test]
+fn a_data_object_nested_too_deep_has_no_links() {
+    // Far past any parser's limit, and no further: the YAML scanner these
+    // files go through slows with the square of the nesting.
+    let deep = 2_000;
+    let v = Builder::new()
+        .file(
+            "content/Target.md",
+            "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# T\n",
+        )
+        .file(
+            "content/closed.json",
+            &format!("{}\"[[Target]]\"{}", "[".repeat(deep), "]".repeat(deep)),
+        )
+        .file("content/open.json", &"[".repeat(deep))
+        .file(
+            "content/keyed.json",
+            &format!(
+                "{}\"[[Target]]\"{}",
+                "{\"link\":".repeat(deep),
+                "}".repeat(deep)
+            ),
+        )
+        .file(
+            "content/flow.yaml",
+            &format!("links: {}\n", "[".repeat(deep)),
+        )
+        .file(
+            "meta/folders/entries.yaml",
+            "entries:\n  closed.json:\n    id: 01jbq100000000000000000002\n  \
+             open.json:\n    id: 01jbq100000000000000000003\n  \
+             keyed.json:\n    id: 01jbq100000000000000000004\n  \
+             flow.yaml:\n    id: 01jbq100000000000000000005\n",
+        )
+        .open();
+    let ix = v.indexes.as_ref().unwrap();
+    for path in ["closed.json", "open.json", "keyed.json", "flow.yaml"] {
+        let id = ix
+            .node(path)
+            .unwrap_or_else(|| panic!("{path} is still a node"))
+            .id
+            .clone();
+        let id = id.unwrap_or_else(|| panic!("{path} keeps its sidecar id"));
+        assert!(
+            ix.edges.iter().all(|e| e.from != id),
+            "{path} is too deep to read, so it has no edges"
+        );
+    }
+    assert!(
+        ix.node("Target.md").is_some(),
+        "and the rest of the vault indexed"
+    );
+}
+
+/// §9.1: a markdown link target is percent-decoded, and one whose escapes are
+/// broken keeps its raw target. `%a€` is the case that matters: the two bytes
+/// after the `%` end inside the `€`, and decoding by slicing the string there
+/// panicked — so one such link in one note stopped `index`, `check`, `serve`
+/// and `mcp` alike until the file was removed by hand.
+#[test]
+fn a_link_with_a_broken_escape_keeps_its_raw_target() {
+    let raw = |href: &str| -> String {
+        let found = basalt::links::extract_links(&format!("see [x]({href}) here"));
+        assert_eq!(found.edges.len(), 1, "{href}: {:?}", found.edges);
+        found.edges[0].raw.clone()
+    };
+    assert_eq!(raw("%a€"), "%a€", "the escape ends inside a character");
+    assert_eq!(raw("%€"), "%€");
+    assert_eq!(raw("%zz.md"), "%zz.md", "not hex");
+    assert_eq!(raw("%+f.md"), "%+f.md", "a sign is not a hex digit");
+    assert_eq!(raw("100%"), "100%", "nothing after the %");
+    assert_eq!(
+        raw("a%20b%2"),
+        "a%20b%2",
+        "one broken escape leaves all of it raw"
+    );
+    assert_eq!(raw("%ff.md"), "%ff.md", "decodes, but not to UTF-8");
+    // What works is unchanged.
+    assert_eq!(raw("My%20Note.md"), "My Note.md");
+    assert_eq!(raw("caf%C3%A9.md"), "café.md");
+    assert_eq!(raw("caf%c3%a9.md"), "café.md");
+
+    // And through a whole index pass: the note is a node and the link an edge.
+    let v = Builder::new()
+        .file(
+            "content/Broken.md",
+            "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n[x](%a€) and [[Broken]]\n",
+        )
+        .open();
+    let ix = v.indexes.as_ref().unwrap();
+    assert!(ix.node("Broken.md").is_some());
+    let edge = ix
+        .edges
+        .iter()
+        .find(|e| e.raw == "%a€")
+        .expect("the broken link is an edge with its raw target");
+    assert_eq!(edge.kind.as_str(), "md");
+    assert_eq!(edge.to, None, "and it resolves to nothing");
+}
+
 /// §6.1: a sidecar entry whose object no longer exists is reported, so a
 /// write-capable pass can prune it.
 #[test]
@@ -776,6 +905,193 @@ fn delete_succeeds_when_a_parent_is_a_file() {
         dir.join("content/Real").is_dir(),
         "and deleting a non-object left the directory alone"
     );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+const OPEN_ACL: &str = "folder:\n  dacl:\n    - {type: allow, subject: everyone, \
+     rights: [read, publish, read_acl, list, traverse], flags: [oi, ci]}\n";
+
+/// §1.1 bounds a key at 1024 bytes and a content key is `content/` + path, so
+/// a longer path names nothing. It is not-found before any §8 evaluation —
+/// which is what a path of thousands of segments was spending minutes on, with
+/// the vault lock held — and a path that does fit is answered as it always was.
+#[test]
+fn a_path_is_served_up_to_the_key_limit_and_names_nothing_past_it() {
+    use basalt::serve::surface::{Fault, Surface};
+
+    let folder = format!("{}/", "d".repeat(250)).repeat(4);
+    let path = format!("{folder}{}.md", "n".repeat(9));
+    assert_eq!(
+        format!("content/{path}").len(),
+        basalt::keys::MAX_KEY_BYTES,
+        "the longest key there is"
+    );
+    let v = Builder::new()
+        .file(
+            &format!("content/{path}"),
+            "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\n# Deep\n",
+        )
+        .file("meta/acl/acl.yaml", OPEN_ACL)
+        .file(
+            "principals/users.yaml",
+            "users:\n  - {id: u:carter, status: active}\n",
+        )
+        .open();
+    let s = Surface::new(v);
+    let who = "u:carter";
+
+    assert!(s.node(who, &path).is_ok(), "node at the limit");
+    assert!(s.raw(who, &path).is_ok(), "raw at the limit");
+    assert!(s.links(who, &path).is_ok(), "links at the limit");
+    assert!(
+        s.effective(who, &path, None).is_ok(),
+        "effective at the limit"
+    );
+    let listing = s.list(who, &folder).expect("list at the limit");
+    let listed: Vec<&str> = listing
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.get("path").and_then(|p| p.as_str()))
+        .collect();
+    assert_eq!(listed, [path.as_str()]);
+
+    // One byte more, as a node and as a folder. The ACL here would allow
+    // every one of these, so not-found is the length speaking.
+    let long = format!("{path}x");
+    let long_folder = format!("{folder}{}/", "n".repeat(12));
+    assert_eq!(
+        format!("content/{long_folder}").len(),
+        basalt::keys::MAX_KEY_BYTES + 1
+    );
+    assert_eq!(s.node(who, &long).err(), Some(Fault::NotFound));
+    assert_eq!(s.raw(who, &long).err(), Some(Fault::NotFound));
+    assert_eq!(s.links(who, &long).err(), Some(Fault::NotFound));
+    assert_eq!(s.effective(who, &long, None).err(), Some(Fault::NotFound));
+    assert_eq!(
+        s.effective(who, &long_folder, None).err(),
+        Some(Fault::NotFound)
+    );
+    assert_eq!(s.list(who, &long_folder).err(), Some(Fault::NotFound));
+}
+
+/// §12.5: every posting costs an ACL evaluation, so a query that repeats a
+/// term must not buy one evaluation per repeat. A repeated term is looked up
+/// once and weighted by its count, which leaves every score where it was.
+#[test]
+fn a_repeated_query_term_weighs_the_same_and_is_looked_up_once() {
+    let v = Builder::new()
+        .file(
+            "content/A.md",
+            "---\nbasalt:\n  id: 01jbq100000000000000000001\n---\nbasalt basalt columns\n",
+        )
+        .file(
+            "content/B.md",
+            "---\nbasalt:\n  id: 01jbq100000000000000000002\n---\nbasalt hexagons hexagons hexagons\n",
+        )
+        .file("meta/acl/acl.yaml", OPEN_ACL)
+        .file("principals/users.yaml", "users:\n  - {id: u:carter, status: active}\n")
+        .open();
+    let scores = |q: &str| -> BTreeMap<String, i64> {
+        v.search("u:carter", q)
+            .into_iter()
+            .map(|h| (h.path, h.score))
+            .collect()
+    };
+    let basalt = scores("basalt");
+    let hexagons = scores("hexagons");
+    assert_eq!(basalt.len(), 2, "{basalt:?}");
+    assert_eq!(hexagons.len(), 1, "{hexagons:?}");
+    assert!(basalt["A.md"] > basalt["B.md"], "{basalt:?}");
+
+    let times = |m: &BTreeMap<String, i64>, n: i64| -> BTreeMap<String, i64> {
+        m.iter().map(|(p, s)| (p.clone(), s * n)).collect()
+    };
+    assert_eq!(scores("basalt basalt"), times(&basalt, 2));
+    assert_eq!(scores(&"basalt ".repeat(2_000)), times(&basalt, 2_000));
+
+    // Mixed with another term, each counts as often as it was asked.
+    let mut mixed = times(&basalt, 1);
+    *mixed.get_mut("B.md").unwrap() += hexagons["B.md"] * 2;
+    assert_eq!(scores("hexagons basalt hexagons"), mixed);
+    let order: Vec<String> = v
+        .search("u:carter", "hexagons basalt hexagons")
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    assert_eq!(order, ["B.md", "A.md"], "highest score first");
+}
+
+/// §2.2 folds names with NFC and lowercase; a case-insensitive filesystem
+/// folds on its own terms and files a key under whichever existing folder its
+/// name folds onto. The transport is the last line of defence for that: a put
+/// whose folder exists only under another spelling is refused, because every
+/// check above it — the ACL among them — judged a folder that is not there.
+#[test]
+fn fs_put_refuses_a_folder_the_filesystem_spells_another_way() {
+    let dir = tempdir();
+    // Only a filesystem that folds case has anything to refuse.
+    std::fs::create_dir_all(dir.join("Probe")).unwrap();
+    if !dir.join("probe").exists() {
+        eprintln!("skipped: {} is case-sensitive", dir.display());
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+
+    let t = basalt::transport::FsTransport::new(&dir);
+    let meta = PutMeta::default();
+    t.put("content/Site/Home.md", b"home", &meta).unwrap();
+
+    let alias = |r: basalt::transport::Result<basalt::transport::Stat>| match r {
+        Err(TransportError::FolderAlias { asked, existing }) => (asked, existing),
+        other => panic!("expected the folder to be refused, got {other:?}"),
+    };
+    assert_eq!(
+        alias(t.put("content/site/Planted.md", b"planted", &meta)),
+        ("content/site/".to_string(), "content/Site/".to_string())
+    );
+    // Create-only or not, and at any depth: the first ancestor that is
+    // another folder's name decides.
+    let create_only = PutMeta {
+        if_match: Some(None),
+        ..Default::default()
+    };
+    assert_eq!(
+        alias(t.put("content/SITE/Sub/Deep.md", b"planted", &create_only)),
+        ("content/SITE/".to_string(), "content/Site/".to_string())
+    );
+    assert_eq!(
+        alias(t.put("CONTENT/Site/Planted.md", b"planted", &meta)),
+        ("CONTENT/".to_string(), "content/".to_string())
+    );
+    t.put("content/Site/Sub/Page.md", b"page", &meta).unwrap();
+    assert_eq!(
+        alias(t.put("content/Site/sub/Planted.md", b"planted", &meta)),
+        (
+            "content/Site/sub/".to_string(),
+            "content/Site/Sub/".to_string()
+        )
+    );
+    let mut site: Vec<String> = t.list_all("content/").unwrap();
+    site.sort();
+    assert_eq!(
+        site,
+        ["content/Site/Home.md", "content/Site/Sub/Page.md"],
+        "nothing was planted in the existing folders"
+    );
+
+    // The folder as spelled, and a folder nobody has made, are both fine.
+    t.put("content/Site/About.md", b"about", &meta).unwrap();
+    t.put("content/Other/New/Note.md", b"new", &meta).unwrap();
+
+    // Spelling is compared in NFC: a folder the filesystem keeps decomposed
+    // is the same folder as the key's composed name, not an alias of it.
+    std::fs::create_dir_all(dir.join("content/Cafe\u{301}")).unwrap();
+    if dir.join("content/Caf\u{e9}").exists() {
+        t.put("content/Caf\u{e9}/Menu.md", b"menu", &meta).unwrap();
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }

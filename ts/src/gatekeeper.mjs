@@ -44,7 +44,11 @@ export class Gatekeeper {
   invalidate() { this.router.invalidate(); }
 
   listen(port = 4380, host = '127.0.0.1') {
-    this.server = http.createServer((req, res) => this.handle(req, res));
+    // `handle` does not reject, but nothing here may depend on that: an
+    // unhandled rejection would take the whole process down.
+    this.server = http.createServer((req, res) => {
+      Promise.resolve(this.handle(req, res)).catch(() => res.destroy());
+    });
     return new Promise((resolve) => {
       this.server.listen(port, host, () => resolve(this.server));
     });

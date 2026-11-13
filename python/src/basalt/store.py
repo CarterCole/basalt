@@ -48,7 +48,7 @@ from .keys import (
     path_to_key,
     validate_key,
 )
-from .transport import PreconditionFailed
+from .transport import FolderAliased, PreconditionFailed
 
 #: The largest object a store accepts: a bound, not a recommendation.
 MAX_STORE_BYTES = 25 * 1024 * 1024
@@ -107,6 +107,23 @@ def _bad(detail: str) -> StoreFault:
 
 def _conflict(detail: str) -> StoreFault:
     return StoreFault("conflict", 409, detail)
+
+
+def _aliased(err: FolderAliased) -> StoreFault:
+    """A §2.2 collision the rule itself cannot see, so the same fault.
+
+    §2.2 folds with NFC and lowercase; a case-insensitive filesystem folds
+    further, and only the transport knows which folder a name really opens.
+    """
+
+    def shown(key: str) -> str:
+        return key.removeprefix(CONTENT) + "/"
+
+    if err.found is None:
+        return _conflict(f"{shown(err.asked)} is a folder this filesystem spells another way")
+    return _conflict(
+        f"{shown(err.asked)} is the same folder as {shown(err.found)} on this filesystem"
+    )
 
 
 @dataclass
@@ -303,6 +320,18 @@ def stamp_note(text: str, node_id: str, *, title: str | None, created_by: dict[s
     its own author. ``title`` is the author's key, so it is only ever added.
     Comments and key order survive (§13.4).
     """
+    return _stamp(text, node_id, title=title, created_by=created_by)[0]
+
+
+def _stamp(
+    text: str, node_id: str, *, title: str | None, created_by: dict[str, Any] | None
+) -> tuple[str, bool]:
+    """:func:`stamp_note`, and whether the ``basalt`` block it wrote carries ``acl``.
+
+    The second is the writer's own answer to §12.7 item 2's question. The
+    reader's parse of what arrived is another parser's, and the two have
+    disagreed.
+    """
     split = split_frontmatter(text)
     if split.raw is None:
         doc: dict[str, Any] = {"basalt": {"id": node_id}}
@@ -310,9 +339,12 @@ def stamp_note(text: str, node_id: str, *, title: str | None, created_by: dict[s
             doc["basalt"]["created_by"] = created_by
         if title:
             doc["title"] = title
-        return f"---\n{yamlio.dump(doc).rstrip()}\n---\n{text}"
+        return f"---\n{yamlio.dump(doc).rstrip()}\n---\n{text}", False
+
+    sets_acl = False
 
     def mutate(doc: Any) -> Any:
+        nonlocal sets_acl
         if not isinstance(doc, dict):
             raise _bad("the frontmatter is not a YAML mapping")
         block = doc.get("basalt")
@@ -329,13 +361,14 @@ def stamp_note(text: str, node_id: str, *, title: str | None, created_by: dict[s
             block["created_by"] = created_by
         if title and "title" not in doc:
             doc["title"] = title
+        sets_acl = block.get("acl") is not None
         return doc
 
     try:
         rewritten = yamlio.edit(split.raw, mutate).rstrip("\n")
     except yamlio.CommentsWouldBeLost as err:
         raise _bad(f"the frontmatter is not valid YAML: {err}") from err
-    return f"---\n{rewritten}\n---\n{split.body}"
+    return f"---\n{rewritten}\n---\n{split.body}", sets_acl
 
 
 def _add_sidecar_entry(vault: Any, folder: str, name: str, entry: dict[str, Any]) -> None:
@@ -389,6 +422,8 @@ def _add_sidecar_entry(vault: Any, folder: str, name: str, entry: dict[str, Any]
             )
         except PreconditionFailed:
             continue
+        except FolderAliased as err:
+            raise _aliased(err) from err
         return
     raise _conflict(f"{key} kept changing underneath this store; try again")
 
@@ -469,9 +504,10 @@ def _store(
             ) from err
 
     # --- authorization (§8)
+    note = parse_note(text or "", path) if kind == "note" else None
     if principal is not None:
         _authorize(vault, principal, folder, ["create_child"], "create_child is required")
-        if kind == "note" and parse_note(text or "", path).acl is not None:
+        if note is not None and note.acl is not None:
             _authorize(
                 vault, principal, folder, ["write_acl"],
                 "frontmatter sets basalt.acl, which needs write_acl",
@@ -504,14 +540,32 @@ def _store(
 
     node_id = ulid()
     content = data
-    if kind == "note":
-        content = stamp_note(text or "", node_id, title=title, created_by=created_by).encode("utf-8")
+    if note is not None:
+        stamped, sets_acl = _stamp(text or "", node_id, title=title, created_by=created_by)
+        # The reader's loader and the writer's are two parsers. A block only
+        # the writer can read (an application tag is enough) looked, above,
+        # like a note with no basalt.acl, and would be stamped and stored with
+        # one for another implementation's reader to honour. Refuse it, as the
+        # Rust store refuses malformed frontmatter; nothing is written yet.
+        if any(e["code"] == "FRONTMATTER_PARSE" for e in note.errors):
+            raise _bad("the frontmatter is not valid YAML")
+        # And item 2 once more, asked of the block about to be written rather
+        # than of a parse of what arrived, so that the check and the write
+        # cannot come to disagree about whether an ACL is being stored.
+        if sets_acl and principal is not None:
+            _authorize(
+                vault, principal, folder, ["write_acl"],
+                "frontmatter sets basalt.acl, which needs write_acl",
+            )
+        content = stamped.encode("utf-8")
 
     # --- write: content first, then the sidecar, then the indexes (item 7)
     try:
         vault.t.put(key, content, if_match=None, content_type=media_for(path))
     except PreconditionFailed as err:
         raise _conflict(f"{path} was created by someone else just now") from err
+    except FolderAliased as err:
+        raise _aliased(err) from err
 
     if kind != "note":
         entry: dict[str, Any] = {"id": node_id}

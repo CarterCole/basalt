@@ -45,6 +45,31 @@ class PreconditionFailed(RuntimeError):
     code = "PRECONDITION_FAILED"
 
 
+class FolderAliased(RuntimeError):
+    """A put into a folder the store would resolve to one spelled differently.
+
+    Keys are exact (§1.1) and §2.2 folds them with NFC and lowercase, but a
+    case-insensitive filesystem folds names its own way and further: on APFS
+    ``Site/`` spelled with a long s (U+017F) for its first letter *is*
+    ``Site/``. Written there, an object would land in a folder its key does
+    not name, under whatever ACL the key's own spelling was judged by. Only a
+    transport over such a filesystem raises this; an object store does not
+    alias.
+
+    ``asked`` is the folder as the key spells it and ``found`` as the store
+    lists it, both as keys without a trailing slash. ``found`` is ``None``
+    when the store resolves the name but lists nothing that owns up to it.
+    """
+
+    code = "FOLDER_ALIASED"
+
+    def __init__(self, asked: str, found: str | None) -> None:
+        other = f"{found}/" if found is not None else "one spelled another way"
+        super().__init__(f"{asked}/ is the same folder as {other} on this filesystem")
+        self.asked = asked
+        self.found = found
+
+
 @dataclass(frozen=True)
 class Stat:
     """Metadata without the body: the only three fields §1 permits."""
@@ -140,6 +165,7 @@ class Transport(abc.ABC):
 __all__ = [
     "CAPABILITIES",
     "UNSET",
+    "FolderAliased",
     "Listing",
     "PreconditionFailed",
     "Stat",

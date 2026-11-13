@@ -119,14 +119,45 @@ export class Router {
     };
   }
 
+  /**
+   * Answer one request. This never rejects: the listener does not await it,
+   * and in Node a rejection nobody handles ends the process, so anything a
+   * request can make throw would be a way to stop the server for everyone.
+   */
   async handle(req, res) {
-    const base = this.#base(req);
-    const url = new URL(req.url, base);
-    const principal = this.identify(req);
-    const path = url.pathname;
+    try {
+      await this.#route(req, res);
+    } catch {
+      try {
+        if (res.headersSent) res.destroy();
+        else {
+          this.#send(req, 'router')(res, 500, problem('internal'),
+            { 'content-type': 'application/problem+json' });
+        }
+      } catch {
+        res.destroy();
+      }
+    }
+  }
+
+  async #route(req, res) {
     let send = this.#send(req, 'router');
+    // The target and the Host are the client's to choose. `GET //`, a Host of
+    // `[`, or a forwarded proto that is not a scheme do not parse as a URL.
+    let base;
+    let url;
+    try {
+      base = this.#base(req);
+      url = new URL(req.url, base);
+    } catch {
+      send(res, 400, problem('bad_request', 'the request target or Host is not a valid URL'),
+        { 'content-type': 'application/problem+json' });
+      return;
+    }
+    const path = url.pathname;
 
     try {
+      const principal = this.identify(req);
       if (req.method === 'OPTIONS' && this.cors && !path.startsWith('/dav')) {
         send(res, 204, '', { 'content-length': '0' });
         return;
