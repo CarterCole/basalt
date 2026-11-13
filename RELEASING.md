@@ -1,7 +1,7 @@
 # Releasing Basalt to crates.io, PyPI and npm
 
-Status (2026-11-12): **PyPI is published; crates.io and npm are waiting on
-credentials.** Each registry gets one package, `basalt-vault`, holding the
+Status (2026-11-12): **PyPI and crates.io are published; npm is waiting on a
+credential.** Each registry gets one package, `basalt-vault`, holding the
 library, the `basalt` command and (in Rust and TypeScript) the MCP server. Each
 package has its own repository, and pushing a `vX.Y.Z` tag to that repository
 publishes that version.
@@ -9,7 +9,7 @@ publishes that version.
 | Registry | Repository | State |
 |---|---|---|
 | PyPI | `python-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag (a Trusted Publisher; the first run of that workflow on GitHub) |
-| crates.io | `rust-basalt` | ready and tested, **not tagged**: needs a `CARGO_REGISTRY_TOKEN` secret for the first release |
+| crates.io | `rust-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag, using a `CARGO_REGISTRY_TOKEN` secret (a crates.io Trusted Publisher can be added now that the crate exists, after which the secret can go) |
 | npm | `ts-basalt` | ready and tested, **not tagged**: needs an `NPM_TOKEN` secret for the first release |
 
 The repositories were split out of this one with their history, carry the spec
@@ -28,7 +28,7 @@ repository (package at the root, the spec in `spec/`):
 | `uv build` + `twine check` in `python/` | both pass; wheel has LICENSE and `py.typed`, sdist leaves out tests, `spec/` and the workflow |
 | Rust / TypeScript / Python suites | 145 / 373 (12 skipped) / 387 passing, at spec `9a11585` |
 | The §12.7 store cases | all pass in all three |
-| The three `release.yml` workflows | pass `actionlint`. Python's has run on GitHub and published; the Rust and npm ones have **not** run yet, so their first tag is their first real run |
+| The three `release.yml` workflows | pass `actionlint`. Python's and Rust's have run on GitHub and published; the npm one has **not** run yet, so its first tag is its first real run |
 
 ## 1. Shape: one package and one repository per language
 
