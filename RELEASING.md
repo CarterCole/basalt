@@ -10,7 +10,7 @@ publishes that version.
 |---|---|---|
 | PyPI | `python-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag (a Trusted Publisher; the first run of that workflow on GitHub) |
 | crates.io | `rust-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag, using a `CARGO_REGISTRY_TOKEN` secret (a crates.io Trusted Publisher can be added now that the crate exists, after which the secret can go) |
-| npm | `ts-basalt` | ready and tested, **not tagged**: needs an `NPM_TOKEN` secret for the first release |
+| npm | `ts-basalt` | ready and tested, **not tagged**: the tag *stages* the release (`npm stage publish`, as the `knock` package does) and you approve it with 2FA; the first release needs an `NPM_TOKEN` secret that only has to stage, because there is no package yet to attach a Trusted Publisher to |
 
 The repositories were split out of this one with their history, carry the spec
 as a submodule pinned to `9a11585`, and include the security hardening from
@@ -152,7 +152,7 @@ agreement is the product.
 |---|---|---|
 | crates.io | Trusted Publishing, through `rust-lang/crates-io-auth-action` | secret `CARGO_REGISTRY_TOKEN` |
 | PyPI | a Trusted Publisher for the repository, workflow `release.yml`, environment `pypi` | secret `PYPI_API_TOKEN` |
-| npm | a Trusted Publisher for the repository and workflow (needs npm 11.5.1+), with `--provenance` | secret `NPM_TOKEN` |
+| npm | a Trusted Publisher for the repository and workflow, allowed to `npm stage publish` (npm 11.15+); provenance is automatic. A tag stages the version and it goes live when approved with 2FA (Staged Packages tab, or `npm stage approve`) | secret `NPM_TOKEN`, for the first release only |
 
 Setting these up happens on each registry's website and in each repository's
 secrets, so it is done by hand. As far as I know, crates.io and npm want the
