@@ -1,3 +1,5 @@
+![BASALT](.github/banner.png)
+
 # Basalt
 
 **A portable knowledge vault that lives in any key-value object store, with
