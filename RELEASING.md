@@ -1,7 +1,7 @@
 # Releasing Basalt to crates.io, PyPI and npm
 
-Status (2026-11-12): **PyPI and crates.io are published; npm is waiting on a
-credential.** Each registry gets one package, `basalt-vault`, holding the
+Status (2026-11-14): **`basalt-vault` 1.0.0 is published on PyPI, crates.io
+and npm.** Each registry gets one package, `basalt-vault`, holding the
 library, the `basalt` command and (in Rust and TypeScript) the MCP server. Each
 package has its own repository, and pushing a `vX.Y.Z` tag to that repository
 publishes that version.
@@ -10,7 +10,7 @@ publishes that version.
 |---|---|---|
 | PyPI | `python-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag (a Trusted Publisher; the first run of that workflow on GitHub) |
 | crates.io | `rust-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag, using a `CARGO_REGISTRY_TOKEN` secret (a crates.io Trusted Publisher can be added now that the crate exists, after which the secret can go) |
-| npm | `ts-basalt` | ready and tested, **not tagged**: the tag *stages* the release (`npm stage publish`, as the `knock` package does) and you approve it with 2FA; the package was created on 2026-11-14 by publishing a `0.0.1` placeholder by hand (own login and 2FA, no token), so a Trusted Publisher can now be attached; add it right before the release, since npm drops one that has not published within 2 days |
+| npm | `ts-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag: CI staged it through a Trusted Publisher (`npm stage publish`, with provenance, no token) and it went live when approved with 2FA. The package was first created by hand with a `0.0.1` placeholder (own login and 2FA), since a Trusted Publisher needs an existing package. `0.0.1` and an npm-made `0.0.0-stage` remain as older versions |
 
 The repositories were split out of this one with their history, carry the spec
 as a submodule pinned to `9a11585`, and include the security hardening from
@@ -28,7 +28,7 @@ repository (package at the root, the spec in `spec/`):
 | `uv build` + `twine check` in `python/` | both pass; wheel has LICENSE and `py.typed`, sdist leaves out tests, `spec/` and the workflow |
 | Rust / TypeScript / Python suites | 145 / 373 (12 skipped) / 387 passing, at spec `9a11585` |
 | The §12.7 store cases | all pass in all three |
-| The three `release.yml` workflows | pass `actionlint`. Python's and Rust's have run on GitHub and published; the npm one has **not** run yet, so its first tag is its first real run |
+| The three `release.yml` workflows | pass `actionlint`. All three have run on GitHub and published (npm's failed once with a 401 until its Trusted Publisher config was corrected, then staged on a re-run) |
 
 ## 1. Shape: one package and one repository per language
 
@@ -180,3 +180,14 @@ what `npm install basalt-vault` fetches.
    language repositories are the source of truth, those directories should
    leave the monorepo, and the site should install `basalt-vault` from npm or
    check out `ts-basalt`. Until then the same code lives in two places.
+6. **Make S3 opt-in in the npm package?** The AWS SDK is an
+   `optionalDependencies` entry, and npm installs those by default, so a plain
+   `npm install basalt-vault` pulls in about 32 MB of it. In Python it is the
+   `s3` extra and in Rust the `s3` feature, both opt-in. Moving it to optional
+   peer dependencies would match them, at the cost of S3 users installing the
+   SDK themselves. A change for 1.1.0 or a patch.
+7. **The audit's other findings.** The twelve medium and the low findings from
+   the security audit are not fixed in 1.0.0, nor are two residues it noted
+   (a very deeply nested `.json` data file slows a Rust index pass, and two
+   writers racing to create one folder under two spellings are not
+   serialised).
