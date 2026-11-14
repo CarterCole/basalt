@@ -10,7 +10,7 @@ publishes that version.
 |---|---|---|
 | PyPI | `python-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag (a Trusted Publisher; the first run of that workflow on GitHub) |
 | crates.io | `rust-basalt` | **`basalt-vault` 1.0.0 published** by the `v1.0.0` tag, using a `CARGO_REGISTRY_TOKEN` secret (a crates.io Trusted Publisher can be added now that the crate exists, after which the secret can go) |
-| npm | `ts-basalt` | ready and tested, **not tagged**: the tag *stages* the release (`npm stage publish`, as the `knock` package does) and you approve it with 2FA; the first release needs an `NPM_TOKEN` secret that only has to stage, because there is no package yet to attach a Trusted Publisher to |
+| npm | `ts-basalt` | ready and tested, **not tagged**: the tag *stages* the release (`npm stage publish`, as the `knock` package does) and you approve it with 2FA; the package was created on 2026-11-14 by publishing a `0.0.1` placeholder by hand (own login and 2FA, no token), so a Trusted Publisher can now be attached; add it right before the release, since npm drops one that has not published within 2 days |
 
 The repositories were split out of this one with their history, carry the spec
 as a submodule pinned to `9a11585`, and include the security hardening from
