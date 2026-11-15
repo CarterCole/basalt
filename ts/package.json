@@ -1,6 +1,6 @@
 {
   "name": "basalt-vault",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Basalt Protocol v1 — a portable knowledge vault in any S3-compatible object store, with inherited permissions and derived link indexes",
   "keywords": [
     "basalt",
@@ -62,7 +62,17 @@
     "marked": "^18.1.1",
     "yaml": "^2.8.1"
   },
-  "optionalDependencies": {
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.716.0",
+    "@aws-sdk/client-sts": "^3.1152.0",
+    "@aws-sdk/s3-request-presigner": "^3.716.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": { "optional": true },
+    "@aws-sdk/client-sts": { "optional": true },
+    "@aws-sdk/s3-request-presigner": { "optional": true }
+  },
+  "devDependencies": {
     "@aws-sdk/client-s3": "^3.716.0",
     "@aws-sdk/client-sts": "^3.1152.0",
     "@aws-sdk/s3-request-presigner": "^3.716.0"

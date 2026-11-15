@@ -20,9 +20,18 @@ package, the [Rust crate](https://crates.io/crates/basalt-vault) and the
 npm install -g basalt-vault
 ```
 
-This installs the `basalt` command. Node 20 or later. The AWS SDK comes in as
-an optional dependency, so `npm install --omit=optional` gives you folders and
-git with no cloud code at all.
+This installs the `basalt` command. Node 20 or later. Folders, git and gists
+work out of the box, with no cloud code installed.
+
+To use an S3-compatible bucket (AWS S3, MinIO, Cloudflare R2), install the AWS
+SDK next to it. `@aws-sdk/client-s3` is the one you need; the other two are for
+naming the caller (`client-sts`) and presigned URLs (`s3-request-presigner`):
+
+```bash
+npm install -g basalt-vault @aws-sdk/client-s3 @aws-sdk/client-sts @aws-sdk/s3-request-presigner
+```
+
+In a project, leave out `-g`.
 
 ## The command
 

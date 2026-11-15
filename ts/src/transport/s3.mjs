@@ -66,8 +66,9 @@ export class S3Transport {
       sdk = await import('@aws-sdk/client-s3');
     } catch {
       throw new Error(
-        'S3Transport needs @aws-sdk/client-s3. Install it, or use FsTransport ' +
-        'for a local vault.',
+        'S3 vaults need the AWS SDK, which basalt-vault does not install: run ' +
+        '`npm install @aws-sdk/client-s3` (add -g if basalt-vault is installed ' +
+        'globally). For a local vault, use a folder (--vault DIR) or FsTransport.',
       );
     }
     const cfg = { ...this.config };
@@ -104,7 +105,9 @@ export class S3Transport {
     try {
       sts = await import('@aws-sdk/client-sts');
     } catch {
-      throw new Error('naming the caller needs @aws-sdk/client-sts');
+      throw new Error(
+        'naming the caller needs @aws-sdk/client-sts: run `npm install @aws-sdk/client-sts`',
+      );
     }
     const client = new sts.STSClient({
       region: this.config.region,
@@ -238,7 +241,9 @@ export class S3Transport {
     try {
       signer = await import('@aws-sdk/s3-request-presigner');
     } catch {
-      throw new Error('presign needs @aws-sdk/s3-request-presigner');
+      throw new Error(
+        'presign needs @aws-sdk/s3-request-presigner: run `npm install @aws-sdk/s3-request-presigner`',
+      );
     }
     return signer.getSignedUrl(
       this.#client,
